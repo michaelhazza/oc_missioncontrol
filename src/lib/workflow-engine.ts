@@ -12,6 +12,7 @@ import type { Task, WorkflowTemplate, WorkflowStage, TaskRole } from '@/lib/type
 
 interface StageTransitionResult {
   success: boolean;
+  handled: boolean;  // true if workflow found + handled this stage (including queue stages)
   handedOff: boolean;
   newAgentId?: string;
   newAgentName?: string;
@@ -108,14 +109,14 @@ export async function handleStageTransition(
   const workflow = getTaskWorkflow(taskId);
   if (!workflow) {
     // No workflow template — fall back to legacy single-agent behavior
-    return { success: true, handedOff: false };
+    return { success: true, handled: false, handedOff: false };
   }
 
   // Find the stage that maps to this status
   const targetStage = workflow.stages.find(s => s.status === newStatus);
   if (!targetStage) {
     // Status not in workflow
-    return { success: true, handedOff: false };
+    return { success: true, handled: false, handedOff: false };
   }
 
   if (!targetStage.role) {
@@ -130,7 +131,8 @@ export async function handleStageTransition(
         );
       }
     }
-    return { success: true, handedOff: false };
+    // Stage is handled by the workflow (as a queue stage) — no fallback needed
+    return { success: true, handled: true, handedOff: false };
   }
 
   // Find the agent assigned to this role (task_roles first, then fall back to assigned_agent_id)
@@ -160,7 +162,7 @@ export async function handleStageTransition(
       [errorMsg, taskId]
     );
     console.warn(`[Workflow] ${errorMsg} (task ${taskId})`);
-    return { success: false, handedOff: false, error: errorMsg };
+    return { success: false, handled: true, handedOff: false, error: errorMsg };
   }
 
   // Assign agent to task
@@ -182,7 +184,7 @@ export async function handleStageTransition(
   );
 
   if (options?.skipDispatch) {
-    return { success: true, handedOff: true, newAgentId: roleAgent.id, newAgentName: roleAgent.name };
+    return { success: true, handled: true, handedOff: true, newAgentId: roleAgent.id, newAgentName: roleAgent.name };
   }
 
   // Dispatch to the agent
@@ -203,16 +205,16 @@ export async function handleStageTransition(
       const error = `Auto-dispatch to ${roleAgent.name} failed (${dispatchRes.status}): ${errorText}`;
       console.error(`[Workflow] ${error}`);
       run('UPDATE tasks SET planning_dispatch_error = ?, updated_at = ? WHERE id = ?', [error, now, taskId]);
-      return { success: false, handedOff: true, newAgentId: roleAgent.id, newAgentName: roleAgent.name, error };
+      return { success: false, handled: true, handedOff: true, newAgentId: roleAgent.id, newAgentName: roleAgent.name, error };
     }
 
     console.log(`[Workflow] Dispatched task ${taskId} to ${roleAgent.name} (role: ${targetStage.role})`);
-    return { success: true, handedOff: true, newAgentId: roleAgent.id, newAgentName: roleAgent.name };
+    return { success: true, handled: true, handedOff: true, newAgentId: roleAgent.id, newAgentName: roleAgent.name };
   } catch (err) {
     const error = `Dispatch error: ${(err as Error).message}`;
     console.error(`[Workflow] ${error}`);
     run('UPDATE tasks SET planning_dispatch_error = ?, updated_at = ? WHERE id = ?', [error, now, taskId]);
-    return { success: false, handedOff: true, newAgentId: roleAgent.id, newAgentName: roleAgent.name, error };
+    return { success: false, handled: true, handedOff: true, newAgentId: roleAgent.id, newAgentName: roleAgent.name, error };
   }
 }
 
@@ -227,12 +229,12 @@ export async function handleStageFailure(
 ): Promise<StageTransitionResult> {
   const workflow = getTaskWorkflow(taskId);
   if (!workflow) {
-    return { success: false, handedOff: false, error: 'No workflow template' };
+    return { success: false, handled: false, handedOff: false, error: 'No workflow template' };
   }
 
   const targetStatus = workflow.fail_targets[currentStatus];
   if (!targetStatus) {
-    return { success: false, handedOff: false, error: `No fail target defined for status: ${currentStatus}` };
+    return { success: false, handled: false, handedOff: false, error: `No fail target defined for status: ${currentStatus}` };
   }
 
   const now = new Date().toISOString();

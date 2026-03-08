@@ -246,8 +246,8 @@ export async function PATCH(
         previousStatus: existing.status,
       });
 
-      if (!workflowResult.handedOff) {
-        // No workflow template or no role for this stage — fall back to legacy dispatch
+      if (!workflowResult.handled) {
+        // No workflow template found — fall back to legacy dispatch
         const missionControlUrl = getMissionControlUrl();
         const headers: Record<string, string> = { 'Content-Type': 'application/json' };
         if (process.env.MC_API_TOKEN) {
@@ -339,16 +339,13 @@ export async function PATCH(
       if (refreshed) broadcast({ type: 'task_updated', payload: refreshed });
     }
 
-    // Notify learner on stage transitions (non-blocking)
-    if (nextStatus && nextStatus !== existing.status) {
-      const isForwardMove = !['inbox', 'assigned', 'planning', 'pending_dispatch'].includes(nextStatus);
-      if (isForwardMove) {
-        notifyLearner(id, {
-          previousStatus: existing.status,
-          newStatus: nextStatus,
-          passed: true,
-        }).catch(err => console.error('[Learner] notification failed:', err));
-      }
+    // Notify learner only on final completion — not on every intermediate transition
+    if (nextStatus === 'done' && nextStatus !== existing.status) {
+      notifyLearner(id, {
+        previousStatus: existing.status,
+        newStatus: nextStatus,
+        passed: true,
+      }).catch(err => console.error('[Learner] notification failed:', err));
     }
 
     // Drain the review queue when a task reaches 'done' (frees the verification slot)

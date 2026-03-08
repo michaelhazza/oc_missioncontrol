@@ -225,54 +225,64 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     const failEndpoint = `POST ${missionControlUrl}/api/tasks/${task.id}/fail`;
 
     let completionInstructions: string;
+    // Get or generate a stable correlationId for this dispatch
+    const existingCorrelationId = (task as Task & { correlation_id?: string }).correlation_id;
+    const correlationId = existingCorrelationId || uuidv4();
+    if (!existingCorrelationId) {
+      run('UPDATE tasks SET correlation_id = ?, gateway_task_id = ?, updated_at = ? WHERE id = ?', [correlationId, correlationId, now, id]);
+    }
+
     if (isBuilder) {
-      completionInstructions = `**IMPORTANT:** After completing work, you MUST call these APIs:
-1. Log activity: POST ${missionControlUrl}/api/tasks/${task.id}/activities
-   Body: {"activity_type": "completed", "message": "Description of what was done"}
-2. Register deliverable: POST ${missionControlUrl}/api/tasks/${task.id}/deliverables
+      completionInstructions = `**IMPORTANT:** After completing work, you MUST call these APIs in order:
+1. Register deliverable: POST ${missionControlUrl}/api/tasks/${task.id}/deliverables
    Body: {"deliverable_type": "file", "title": "File name", "path": "${taskProjectDir}/filename.html"}
-3. Update status: PATCH ${missionControlUrl}/api/tasks/${task.id}
+2. Update status: PATCH ${missionControlUrl}/api/tasks/${task.id}
    Body: {"status": "${nextStatus}"}
 
-When complete, reply with:
-\`TASK_COMPLETE: [brief summary of what you did]\``;
+Then end your response with this exact line:
+\`TASK_COMPLETE[${correlationId}]: [one-line summary of what you did]\`
+
+Do not send any other messages after this. Do not ask for feedback or confirmation.`;
     } else if (isTester) {
       completionInstructions = `**YOUR ROLE: TESTER** — Test the deliverables for this task.
 
 Review the output directory for deliverables and run any applicable tests.
 
 **If tests PASS:**
-1. Log activity: POST ${missionControlUrl}/api/tasks/${task.id}/activities
-   Body: {"activity_type": "completed", "message": "Tests passed: [summary]"}
-2. Update status: PATCH ${missionControlUrl}/api/tasks/${task.id}
+1. Update status: PATCH ${missionControlUrl}/api/tasks/${task.id}
    Body: {"status": "${nextStatus}"}
+Then reply: \`TASK_COMPLETE[${correlationId}]: TEST_PASS: [summary]\`
 
 **If tests FAIL:**
 1. ${failEndpoint}
    Body: {"reason": "Detailed description of what failed and what needs fixing"}
+Then reply: \`TASK_COMPLETE[${correlationId}]: TEST_FAIL: [what failed]\`
 
-Reply with: \`TEST_PASS: [summary]\` or \`TEST_FAIL: [what failed]\``;
+Do not send any other messages after completing. Do not report back to any other agent.`;
     } else if (isVerifier) {
       completionInstructions = `**YOUR ROLE: VERIFIER** — Verify that all work meets quality standards.
 
 Review deliverables, test results, and task requirements.
 
 **If verification PASSES:**
-1. Log activity: POST ${missionControlUrl}/api/tasks/${task.id}/activities
-   Body: {"activity_type": "completed", "message": "Verification passed: [summary]"}
-2. Update status: PATCH ${missionControlUrl}/api/tasks/${task.id}
+1. Update status: PATCH ${missionControlUrl}/api/tasks/${task.id}
    Body: {"status": "${nextStatus}"}
+Then reply: \`TASK_COMPLETE[${correlationId}]: VERIFY_PASS: [summary]\`
 
 **If verification FAILS:**
 1. ${failEndpoint}
    Body: {"reason": "Detailed description of what failed and what needs fixing"}
+Then reply: \`TASK_COMPLETE[${correlationId}]: VERIFY_FAIL: [what failed]\`
 
-Reply with: \`VERIFY_PASS: [summary]\` or \`VERIFY_FAIL: [what failed]\``;
+Do not send any other messages after completing. Do not report back to any other agent.`;
     } else {
       // Fallback for unknown roles
       completionInstructions = `**IMPORTANT:** After completing work:
 1. Update status: PATCH ${missionControlUrl}/api/tasks/${task.id}
-   Body: {"status": "${nextStatus}"}`;
+   Body: {"status": "${nextStatus}"}
+Then reply: \`TASK_COMPLETE[${correlationId}]: [one-line summary]\`
+
+Do not send any other messages after completing.`;
     }
 
     const roleLabel = currentStage?.label || 'Task';
@@ -285,9 +295,7 @@ ${task.due_date ? `**Due:** ${task.due_date}\n` : ''}
 **Task ID:** ${task.id}
 ${planningSpecSection}${agentInstructionsSection}${knowledgeSection}
 ${isBuilder ? `**OUTPUT DIRECTORY:** ${taskProjectDir}\nCreate this directory and save all deliverables there.\n` : `**OUTPUT DIRECTORY:** ${taskProjectDir}\n`}
-${completionInstructions}
-
-If you need help or clarification, ask the orchestrator.`;
+${completionInstructions}`;
 
     // Send message to agent's session using chat.send
     try {
@@ -298,7 +306,7 @@ If you need help or clarification, ask the orchestrator.`;
       await client.call('chat.send', {
         sessionKey,
         message: taskMessage,
-        idempotencyKey: `dispatch-${task.id}-${Date.now()}`
+        idempotencyKey: `dispatch-${correlationId}`,
       });
 
       // Only move to in_progress for builder dispatch (task is in 'assigned' status)

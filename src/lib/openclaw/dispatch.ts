@@ -233,14 +233,7 @@ Content-Type: application/json
 { "status": "in_progress" }
 \`\`\`
 ${agent.is_master ? `\n1a. **When delegating to a specialist**, set assigned agent first:\n\`\`\`\nPATCH ${mcUrl}/api/tasks/${task.id}\nContent-Type: application/json\n{ "status": "assigned", "assigned_agent_id": "<specialist_mc_agent_id>" }\n\`\`\`\n` : ''}
-2. **Log activity** as you work (call as many times as needed):
-\`\`\`
-POST ${mcUrl}/api/tasks/${task.id}/activities
-Content-Type: application/json
-{ "activity_type": "updated", "message": "<what you are doing>" }
-\`\`\`
-
-3. **Log deliverables** for each output (file path, URL, or artifact):
+2. **Log deliverables** for each output (file path, URL, or artifact):
 \`\`\`
 POST ${mcUrl}/api/tasks/${task.id}/deliverables
 Content-Type: application/json
@@ -248,8 +241,9 @@ Content-Type: application/json
 \`\`\`
 ${agent.mattermost_channel ? `Use \`deliverable_type: "url"\` to record the Mattermost post URL from \`#${agent.mattermost_channel}\`.` : ''}
 
-4. **Signal completion** — include this exact string in your final response:
+3. **Signal completion** — end your final response with this exact line:
 \`TASK_COMPLETE[${correlationId}]: [one-line summary of what you did]\`
 
-The correlationId \`${correlationId}\` is required for Mission Control to detect completion. Do not omit or alter it.`;
+The correlationId \`${correlationId}\` is required for Mission Control to detect completion. Do not omit or alter it.
+Do not send any other messages after completion. Do not report back to any agent or ask for confirmation.`;
 }

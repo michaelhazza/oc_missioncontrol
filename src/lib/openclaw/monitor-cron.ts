@@ -116,7 +116,7 @@ function formatStaleTaskMessage(tasks: StaleTaskRow[]): string {
     lines.push('');
   }
 
-  lines.push('Send one nudge to each agent. If unresponsive, escalate to the orchestrator with full context.');
+  lines.push('Send one nudge to each stale agent and stop. Do not escalate further or send any follow-up messages.');
 
   return lines.join('\n');
 }
