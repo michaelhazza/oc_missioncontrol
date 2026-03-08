@@ -1,27 +1,47 @@
+/**
+ * POST /api/content/generate-script
+ *
+ * Dispatches a script generation task to the OpenClaw gateway via the
+ * agent-task helper. Replaces the previous direct LiteLLM call so that
+ * script generation flows through the agent orchestration system.
+ *
+ * The content card shows a 'generating' state while the task is in
+ * progress. When the agent completes, the webhook/SSE listener populates
+ * the script into the content card automatically.
+ */
+
 import { NextRequest, NextResponse } from 'next/server';
+import { queryOne, run } from '@/lib/db';
+import { broadcast } from '@/lib/events';
+import { createAndDispatchAgentTask } from '@/lib/openclaw/agent-task';
+import type { ContentItem } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { title, description, platform = 'youtube', notes } = body;
+    const { title, description, platform = 'youtube', notes, content_id, workspace_id } = body;
 
     if (!title) {
       return NextResponse.json({ error: 'Title is required' }, { status: 400 });
     }
 
-    const litellmUrl = process.env.LITELLM_BASE_URL || 'http://localhost:4001/v1';
-    const apiKey = process.env.LITELLM_API_KEY;
+    const workspaceId = workspace_id || 'default';
 
-    if (!apiKey) {
-      return NextResponse.json(
-        { error: 'LITELLM_API_KEY environment variable is not configured' },
-        { status: 503 }
+    // Mark content item as generating if content_id provided
+    if (content_id) {
+      run(
+        "UPDATE content_items SET generation_status = ?, updated_at = datetime('now') WHERE id = ?",
+        ['generating', content_id],
       );
+
+      const item = queryOne<ContentItem>('SELECT * FROM content_items WHERE id = ?', [content_id]);
+      if (item) broadcast({ type: 'content_updated', payload: item });
     }
 
-    const prompt = `You are a professional content creator. Write a complete, engaging script for the following piece of content.
+    // Build the agent task description
+    const taskDescription = `You are a professional content creator. Write a complete, engaging script for the following piece of content.
 
 Title: ${title}
 Platform: ${platform}
@@ -34,36 +54,57 @@ Write a full script with:
 - Engaging storytelling
 - A strong call to action at the end
 
-Format the script clearly with section headers.`;
+Format the script clearly with section headers.
 
-    const response = await fetch(`${litellmUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
+IMPORTANT: Return ONLY the script content in your response, followed by your TASK_COMPLETE marker.`;
+
+    // Dispatch to gateway
+    const result = await createAndDispatchAgentTask({
+      title: `Generate script: ${title}`,
+      description: taskDescription,
+      workspaceId,
+      priority: 'normal',
+      metadata: {
+        type: 'content_script_generation',
+        content_id: content_id || null,
+        platform,
       },
-      body: JSON.stringify({
-        model: 'anthropic/claude-sonnet-4-6',
-        messages: [
-          { role: 'user', content: prompt }
-        ],
-        max_tokens: 2000,
-        temperature: 0.7,
-      }),
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('LiteLLM error:', errorText);
-      return NextResponse.json({ error: 'Failed to generate script from LiteLLM' }, { status: 500 });
+    // Link the gateway task to the content item
+    if (content_id && result.correlationId) {
+      run(
+        "UPDATE content_items SET gateway_task_id = ?, updated_at = datetime('now') WHERE id = ?",
+        [result.correlationId, content_id],
+      );
     }
 
-    const data = await response.json();
-    const script = data.choices?.[0]?.message?.content || '';
+    if (!result.success) {
+      // Dispatch failed but task saved locally — mark content as failed
+      if (content_id) {
+        run(
+          "UPDATE content_items SET generation_status = ?, updated_at = datetime('now') WHERE id = ?",
+          ['failed', content_id],
+        );
+        const item = queryOne<ContentItem>('SELECT * FROM content_items WHERE id = ?', [content_id]);
+        if (item) broadcast({ type: 'content_updated', payload: item });
+      }
 
-    return NextResponse.json({ script });
+      return NextResponse.json({
+        error: 'Script generation dispatched but gateway unreachable. Task saved for retry.',
+        task_id: result.taskId,
+        correlation_id: result.correlationId,
+      }, { status: 202 });
+    }
+
+    return NextResponse.json({
+      status: 'generating',
+      message: 'Script generation task dispatched to agent',
+      task_id: result.taskId,
+      correlation_id: result.correlationId,
+    });
   } catch (error) {
     console.error('POST /api/content/generate-script error:', error);
-    return NextResponse.json({ error: 'Failed to generate script' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to dispatch script generation' }, { status: 500 });
   }
 }

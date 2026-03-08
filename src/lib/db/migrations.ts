@@ -646,6 +646,84 @@ const migrations: Migration[] = [
       `);
       console.log('[Migration 014] content_items table created');
     }
+  },
+  {
+    id: '015',
+    name: 'add_task_gateway_sync_columns',
+    up: (db) => {
+      console.log('[Migration 015] Adding gateway sync columns to tasks...');
+
+      const tasksInfo = db.prepare("PRAGMA table_info(tasks)").all() as { name: string }[];
+
+      if (!tasksInfo.some(col => col.name === 'gateway_task_id')) {
+        db.exec(`ALTER TABLE tasks ADD COLUMN gateway_task_id TEXT`);
+      }
+      if (!tasksInfo.some(col => col.name === 'sync_status')) {
+        db.exec(`ALTER TABLE tasks ADD COLUMN sync_status TEXT DEFAULT 'local'`);
+      }
+      if (!tasksInfo.some(col => col.name === 'retry_count')) {
+        db.exec(`ALTER TABLE tasks ADD COLUMN retry_count INTEGER DEFAULT 0`);
+      }
+      if (!tasksInfo.some(col => col.name === 'last_sync_attempt')) {
+        db.exec(`ALTER TABLE tasks ADD COLUMN last_sync_attempt TEXT`);
+      }
+      if (!tasksInfo.some(col => col.name === 'gateway_completion_notes')) {
+        db.exec(`ALTER TABLE tasks ADD COLUMN gateway_completion_notes TEXT`);
+      }
+
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_sync_status ON tasks(sync_status)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_gateway_task_id ON tasks(gateway_task_id)`);
+      console.log('[Migration 015] Gateway sync columns added to tasks');
+    }
+  },
+  {
+    id: '016',
+    name: 'add_workspace_settings',
+    up: (db) => {
+      console.log('[Migration 016] Adding workspace_settings table...');
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS workspace_settings (
+          id TEXT PRIMARY KEY,
+          workspace_id TEXT NOT NULL UNIQUE REFERENCES workspaces(id),
+          gateway_url TEXT,
+          webhook_secret TEXT,
+          polling_interval_seconds INTEGER DEFAULT 60,
+          state_mapping TEXT DEFAULT '{"queued":"inbox","assigned":"in_progress","running":"in_progress","completed":"done","failed":"blocked"}',
+          max_retry_count INTEGER DEFAULT 5,
+          created_at TEXT DEFAULT (datetime('now')),
+          updated_at TEXT DEFAULT (datetime('now'))
+        )
+      `);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_workspace_settings_workspace ON workspace_settings(workspace_id)`);
+      console.log('[Migration 016] workspace_settings table created');
+    }
+  },
+  {
+    id: '017',
+    name: 'add_agent_capabilities',
+    up: (db) => {
+      console.log('[Migration 017] Adding capabilities column to agents...');
+      const agentsInfo = db.prepare("PRAGMA table_info(agents)").all() as { name: string }[];
+      if (!agentsInfo.some(col => col.name === 'capabilities')) {
+        db.exec(`ALTER TABLE agents ADD COLUMN capabilities TEXT`);
+      }
+      console.log('[Migration 017] Capabilities column added to agents');
+    }
+  },
+  {
+    id: '018',
+    name: 'add_content_items_gateway_tracking',
+    up: (db) => {
+      console.log('[Migration 018] Adding gateway tracking columns to content_items...');
+      const info = db.prepare("PRAGMA table_info(content_items)").all() as { name: string }[];
+      if (!info.some(col => col.name === 'gateway_task_id')) {
+        db.exec(`ALTER TABLE content_items ADD COLUMN gateway_task_id TEXT`);
+      }
+      if (!info.some(col => col.name === 'generation_status')) {
+        db.exec(`ALTER TABLE content_items ADD COLUMN generation_status TEXT DEFAULT 'idle'`);
+      }
+      console.log('[Migration 018] Gateway tracking columns added to content_items');
+    }
   }
 ];
 

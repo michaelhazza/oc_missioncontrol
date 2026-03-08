@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS agents (
   source TEXT DEFAULT 'local',
   gateway_agent_id TEXT,
   session_key_prefix TEXT,
+  capabilities TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -62,6 +63,11 @@ CREATE TABLE IF NOT EXISTS tasks (
   planning_agents TEXT,
   planning_dispatch_error TEXT,
   status_reason TEXT,
+  gateway_task_id TEXT,
+  sync_status TEXT DEFAULT 'local' CHECK (sync_status IN ('local', 'synced', 'pending_sync', 'sync_failed')),
+  retry_count INTEGER DEFAULT 0,
+  last_sync_attempt TEXT,
+  gateway_completion_notes TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -211,6 +217,19 @@ CREATE TABLE IF NOT EXISTS task_deliverables (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
+-- Workspace settings (per-workspace integration configuration)
+CREATE TABLE IF NOT EXISTS workspace_settings (
+  id TEXT PRIMARY KEY,
+  workspace_id TEXT NOT NULL UNIQUE REFERENCES workspaces(id),
+  gateway_url TEXT,
+  webhook_secret TEXT,
+  polling_interval_seconds INTEGER DEFAULT 60,
+  state_mapping TEXT DEFAULT '{"queued":"inbox","assigned":"in_progress","running":"in_progress","completed":"done","failed":"blocked"}',
+  max_retry_count INTEGER DEFAULT 5,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_assigned ON tasks(assigned_agent_id);
@@ -227,4 +246,7 @@ CREATE INDEX IF NOT EXISTS idx_workflow_templates_workspace ON workflow_template
 CREATE INDEX IF NOT EXISTS idx_task_roles_task ON task_roles(task_id);
 CREATE INDEX IF NOT EXISTS idx_knowledge_entries_workspace ON knowledge_entries(workspace_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_knowledge_entries_task ON knowledge_entries(task_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_sync_status ON tasks(sync_status);
+CREATE INDEX IF NOT EXISTS idx_tasks_gateway_task_id ON tasks(gateway_task_id);
+CREATE INDEX IF NOT EXISTS idx_workspace_settings_workspace ON workspace_settings(workspace_id);
 `;
