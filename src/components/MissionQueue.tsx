@@ -29,10 +29,13 @@ const COLUMNS: { id: TaskStatus; label: string; color: string }[] = [
 export function MissionQueue({ workspaceId, mobileMode = false, isPortrait = true }: MissionQueueProps) {
   const { tasks, updateTaskStatus, addEvent } = useMissionControl();
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [draggedTask, setDraggedTask] = useState<Task | null>(null);
   const [mobileStatus, setMobileStatus] = useState<TaskStatus>('planning');
   const [statusMoveTask, setStatusMoveTask] = useState<Task | null>(null);
+
+  // Derive editingTask from the store so it updates live via SSE
+  const editingTask = editingTaskId ? tasks.find(t => t.id === editingTaskId) || null : null;
 
   const getTasksByStatus = (status: TaskStatus) => tasks.filter((task) => task.status === status);
 
@@ -141,7 +144,7 @@ export function MissionQueue({ workspaceId, mobileMode = false, isPortrait = tru
                       key={task.id}
                       task={task}
                       onDragStart={handleDragStart}
-                      onClick={() => setEditingTask(task)}
+                      onClick={() => setEditingTaskId(task.id)}
                       onMoveStatus={() => setStatusMoveTask(task)}
                       isDragging={draggedTask?.id === task.id}
                       mobileMode={false}
@@ -186,7 +189,7 @@ export function MissionQueue({ workspaceId, mobileMode = false, isPortrait = tru
                   key={task.id}
                   task={task}
                   onDragStart={handleDragStart}
-                  onClick={() => setEditingTask(task)}
+                  onClick={() => setEditingTaskId(task.id)}
                   onMoveStatus={() => setStatusMoveTask(task)}
                   isDragging={false}
                   mobileMode
@@ -199,7 +202,7 @@ export function MissionQueue({ workspaceId, mobileMode = false, isPortrait = tru
       )}
 
       {showCreateModal && <TaskModal onClose={() => setShowCreateModal(false)} workspaceId={workspaceId} />}
-      {editingTask && <TaskModal task={editingTask} onClose={() => setEditingTask(null)} workspaceId={workspaceId} />}
+      {editingTask && <TaskModal task={editingTask} onClose={() => setEditingTaskId(null)} workspaceId={workspaceId} />}
 
       {mobileMode && statusMoveTask && (
         <div className="fixed inset-0 z-50 bg-black/60 p-4 flex items-end sm:items-center sm:justify-center" onClick={() => setStatusMoveTask(null)}>
@@ -276,7 +279,20 @@ function TaskCard({ task, onDragStart, onClick, onMoveStatus, isDragging, mobile
       )}
 
       <div className={portraitMode ? 'p-4' : 'p-3'}>
-        <h4 className={`font-medium leading-snug line-clamp-2 ${portraitMode ? 'text-sm mb-3' : 'text-xs mb-2'}`}>{task.title}</h4>
+        <div className="flex items-start gap-2">
+          <h4 className={`font-medium leading-snug line-clamp-2 flex-1 ${portraitMode ? 'text-sm' : 'text-xs'}`}>{task.title}</h4>
+          {task.trigger_type && task.trigger_type !== 'manual' && (
+            <span
+              className="flex-shrink-0 text-xs opacity-60"
+              title={`Triggered by: ${task.trigger_source || task.trigger_type}`}
+            >
+              {task.trigger_type === 'cron' && '\u{1F550}'}
+              {task.trigger_type === 'agent' && '\u{1F916}'}
+              {task.trigger_type === 'webhook' && '\u{1F517}'}
+            </span>
+          )}
+        </div>
+        <div className={portraitMode ? 'mt-3' : 'mt-2'} />
 
         {isPlanning && (
           <div className={`flex items-center gap-2 ${portraitMode ? 'mb-3 py-2 px-3' : 'mb-2 py-1.5 px-2.5'} bg-purple-500/10 rounded-md border border-purple-500/20`}>

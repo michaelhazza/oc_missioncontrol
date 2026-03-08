@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import { X, Save, Trash2, Activity, Package, Bot, ClipboardList, Plus, Users } from 'lucide-react';
+import { X, Save, Trash2, Activity, Package, Bot, ClipboardList, Plus, Users, FileText } from 'lucide-react';
 import { useMissionControl } from '@/lib/store';
 import { triggerAutoDispatch, shouldTriggerAutoDispatch } from '@/lib/auto-dispatch';
 import { ActivityLog } from './ActivityLog';
@@ -12,7 +12,7 @@ import { TeamTab } from './TeamTab';
 import { AgentModal } from './AgentModal';
 import type { Task, TaskPriority, TaskStatus } from '@/lib/types';
 
-type TabType = 'overview' | 'planning' | 'team' | 'activity' | 'deliverables' | 'sessions';
+type TabType = 'overview' | 'brief' | 'planning' | 'team' | 'activity' | 'deliverables' | 'sessions';
 
 interface TaskModalProps {
   task?: Task;
@@ -32,6 +32,30 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
   const handleSpecLocked = useCallback(() => {
     window.location.reload();
   }, []);
+
+  // Brief editing state
+  const [briefText, setBriefText] = useState(task?.brief || '');
+  const [isSavingBrief, setIsSavingBrief] = useState(false);
+
+  const handleSaveBrief = async () => {
+    if (!task) return;
+    setIsSavingBrief(true);
+    try {
+      const res = await fetch(`/api/tasks/${task.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ brief: briefText }),
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        updateTask(updated);
+      }
+    } catch (err) {
+      console.error('Failed to save brief:', err);
+    } finally {
+      setIsSavingBrief(false);
+    }
+  };
 
   const [form, setForm] = useState({
     title: task?.title || '',
@@ -182,6 +206,7 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
 
   const tabs = [
     { id: 'overview' as TabType, label: 'Overview', icon: null },
+    { id: 'brief' as TabType, label: 'Brief', icon: <FileText className="w-4 h-4" /> },
     { id: 'planning' as TabType, label: 'Planning', icon: <ClipboardList className="w-4 h-4" /> },
     { id: 'team' as TabType, label: 'Team', icon: <Users className="w-4 h-4" /> },
     { id: 'activity' as TabType, label: 'Activity', icon: <Activity className="w-4 h-4" /> },
@@ -194,9 +219,30 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
       <div className="bg-mc-bg-secondary border border-mc-border rounded-t-xl sm:rounded-lg w-full max-w-2xl max-h-[92vh] sm:max-h-[90vh] flex flex-col pb-[env(safe-area-inset-bottom)] sm:pb-0">
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-mc-border flex-shrink-0">
-          <h2 className="text-lg font-semibold">
-            {task ? task.title : 'Create New Task'}
-          </h2>
+          <div className="flex-1 min-w-0">
+            <h2 className="text-lg font-semibold">
+              {task ? task.title : 'Create New Task'}
+            </h2>
+            {task && task.trigger_type && task.trigger_type !== 'manual' && (
+              <div className="mt-1">
+                {task.trigger_type === 'cron' && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                    <span>&#128336;</span> Cron: {task.cron_job_id || task.trigger_source}
+                  </span>
+                )}
+                {task.trigger_type === 'agent' && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-purple-500/10 text-purple-400 border border-purple-500/20">
+                    <span>&#129302;</span> Spawned by: {task.trigger_source}
+                  </span>
+                )}
+                {task.trigger_type === 'webhook' && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full bg-green-500/10 text-green-400 border border-green-500/20">
+                    <span>&#128279;</span> Webhook: {task.trigger_source}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
           <button
             onClick={onClose}
             className="p-1 hover:bg-mc-bg-tertiary rounded"
@@ -341,6 +387,37 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
             </div>
           )}
             </form>
+          )}
+
+          {/* Brief Tab */}
+          {activeTab === 'brief' && task && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <label className="block text-sm font-medium">Task Brief</label>
+                <button
+                  onClick={handleSaveBrief}
+                  disabled={isSavingBrief}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-mc-accent text-mc-bg rounded font-medium hover:bg-mc-accent/90 disabled:opacity-50"
+                >
+                  <Save className="w-3 h-3" />
+                  {isSavingBrief ? 'Saving...' : 'Save Brief'}
+                </button>
+              </div>
+              <textarea
+                value={briefText}
+                onChange={(e) => setBriefText(e.target.value)}
+                onBlur={handleSaveBrief}
+                rows={12}
+                className="w-full bg-mc-bg border border-mc-border rounded px-3 py-2 text-sm focus:outline-none focus:border-mc-accent resize-y font-mono"
+                placeholder="No brief — add context for the assigned agent"
+              />
+              {briefText && (
+                <div className="border border-mc-border rounded p-4 bg-mc-bg">
+                  <div className="text-xs text-mc-text-secondary mb-2 uppercase tracking-wider">Preview</div>
+                  <pre className="text-sm whitespace-pre-wrap break-words">{briefText}</pre>
+                </div>
+              )}
+            </div>
           )}
 
           {/* Planning Tab */}

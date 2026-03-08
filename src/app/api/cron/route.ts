@@ -3,6 +3,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import { Cron } from 'croner';
+import { queryOne } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
 
@@ -94,6 +95,32 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ events: [] });
   }
 
-  const events = computeMonthlyOccurrences(jobs.filter(j => j.enabled !== false), year, month);
-  return NextResponse.json({ events });
+  const enabledJobs = jobs.filter(j => j.enabled !== false);
+  const events = computeMonthlyOccurrences(enabledJobs, year, month);
+
+  // Enrich each job with last-run status from Mission Control
+  const lastRunByJob: Record<string, { lastTaskId: string | null; lastTaskStatus: string | null; lastTaskCompletedAt: string | null }> = {};
+  for (const job of enabledJobs) {
+    if (!lastRunByJob[job.id]) {
+      try {
+        const lastTask = queryOne<{ id: string; status: string; updated_at: string }>(
+          'SELECT id, status, updated_at FROM tasks WHERE cron_job_id = ? ORDER BY created_at DESC LIMIT 1',
+          [job.id]
+        );
+        lastRunByJob[job.id] = lastTask
+          ? { lastTaskId: lastTask.id, lastTaskStatus: lastTask.status, lastTaskCompletedAt: lastTask.updated_at }
+          : { lastTaskId: null, lastTaskStatus: null, lastTaskCompletedAt: null };
+      } catch {
+        lastRunByJob[job.id] = { lastTaskId: null, lastTaskStatus: null, lastTaskCompletedAt: null };
+      }
+    }
+  }
+
+  // Attach last-run info to each calendar event
+  const enrichedEvents = events.map(event => ({
+    ...event,
+    ...lastRunByJob[event.jobId],
+  }));
+
+  return NextResponse.json({ events: enrichedEvents });
 }

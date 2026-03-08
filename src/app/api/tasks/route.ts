@@ -54,6 +54,18 @@ export async function GET(request: NextRequest) {
       params.push(assignedAgentId);
     }
 
+    const triggerType = searchParams.get('trigger_type');
+    if (triggerType) {
+      sql += ' AND t.trigger_type = ?';
+      params.push(triggerType);
+    }
+
+    const cronJobId = searchParams.get('cron_job_id');
+    if (cronJobId) {
+      sql += ' AND t.cron_job_id = ?';
+      params.push(cronJobId);
+    }
+
     sql += ' ORDER BY t.created_at DESC';
 
     const tasks = queryAll<Task & { assigned_agent_name?: string; assigned_agent_emoji?: string; created_by_agent_name?: string }>(sql, params);
@@ -108,8 +120,8 @@ export async function POST(request: NextRequest) {
     const workflowTemplateId = defaultTemplate?.id || null;
 
     run(
-      `INSERT INTO tasks (id, title, description, status, priority, assigned_agent_id, created_by_agent_id, workspace_id, business_id, due_date, workflow_template_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO tasks (id, title, description, status, priority, assigned_agent_id, created_by_agent_id, workspace_id, business_id, due_date, workflow_template_id, brief, trigger_type, trigger_source, cron_job_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         validatedData.title,
@@ -122,6 +134,10 @@ export async function POST(request: NextRequest) {
         validatedData.business_id || 'default',
         validatedData.due_date || null,
         workflowTemplateId,
+        validatedData.brief || null,
+        validatedData.trigger_type || 'manual',
+        validatedData.trigger_source || null,
+        validatedData.cron_job_id || null,
         now,
         now,
       ]

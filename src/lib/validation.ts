@@ -16,12 +16,19 @@ const TaskStatus = z.enum([
 
 const TaskPriority = z.enum(['low', 'normal', 'high', 'urgent']);
 
+const TriggerType = z.enum(['manual', 'cron', 'agent', 'webhook']);
+
 const ActivityType = z.enum([
   'spawned',
   'updated',
   'completed',
   'file_created',
-  'status_changed'
+  'status_changed',
+  'created',
+  'assigned',
+  'progress',
+  'blocked',
+  'note'
 ]);
 
 const DeliverableType = z.enum(['file', 'url', 'artifact']);
@@ -37,6 +44,10 @@ export const CreateTaskSchema = z.object({
   business_id: z.string().optional(),
   workspace_id: z.string().optional(),
   due_date: z.string().optional().nullable(),
+  brief: z.string().max(50000, 'Brief must be 50000 characters or less').optional(),
+  trigger_type: TriggerType.optional(),
+  trigger_source: z.string().optional(),
+  cron_job_id: z.string().optional(),
 });
 
 export const UpdateTaskSchema = z.object({
@@ -48,6 +59,7 @@ export const UpdateTaskSchema = z.object({
   workflow_template_id: z.string().optional().nullable(),
   due_date: z.string().optional().nullable(),
   updated_by_agent_id: z.string().uuid().optional(),
+  brief: z.string().max(50000, 'Brief must be 50000 characters or less').optional(),
 });
 
 // Activity validation schema
@@ -55,6 +67,7 @@ export const CreateActivitySchema = z.object({
   activity_type: ActivityType,
   message: z.string().min(1, 'Message is required').max(5000, 'Message must be 5000 characters or less'),
   agent_id: z.string().uuid().optional(),
+  author: z.string().optional(),
   metadata: z.string().optional(),
 });
 
