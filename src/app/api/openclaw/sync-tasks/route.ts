@@ -102,7 +102,7 @@ function updateTaskFromSync(task: Task, summary: string): void {
   const now = new Date().toISOString();
 
   run(
-    `UPDATE tasks SET status = 'testing', sync_status = 'synced',
+    `UPDATE tasks SET status = 'review', sync_status = 'synced',
      gateway_completion_notes = ?, updated_at = ? WHERE id = ?`,
     [summary, now, task.id],
   );
