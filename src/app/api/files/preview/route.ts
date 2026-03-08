@@ -4,7 +4,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, realpathSync } from 'fs';
 import path from 'path';
 
 export const dynamic = 'force-dynamic';
@@ -30,23 +30,43 @@ export async function GET(request: NextRequest) {
     process.env.PROJECTS_PATH?.replace(/^~/, process.env.HOME || ''),
   ].filter(Boolean) as string[];
 
-  const isAllowed = allowedPaths.some(allowed =>
-    normalizedPath.startsWith(path.normalize(allowed))
-  );
-
-  if (!isAllowed) {
-    return NextResponse.json({ error: 'Path not allowed' }, { status: 403 });
+  if (allowedPaths.length === 0) {
+    return NextResponse.json({ error: 'No allowed directories configured' }, { status: 403 });
   }
 
   if (!existsSync(normalizedPath)) {
     return NextResponse.json({ error: 'File not found' }, { status: 404 });
   }
 
+  // Resolve real path to prevent symlink attacks
+  let resolvedPath: string;
   try {
-    const content = readFileSync(normalizedPath, 'utf-8');
+    resolvedPath = realpathSync(normalizedPath);
+  } catch {
+    return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+  }
+
+  const isAllowed = allowedPaths.some(allowed => {
+    try {
+      const resolvedAllowed = realpathSync(path.normalize(allowed));
+      return resolvedPath.startsWith(resolvedAllowed + path.sep) || resolvedPath === resolvedAllowed;
+    } catch {
+      return false;
+    }
+  });
+
+  if (!isAllowed) {
+    console.warn(`[SECURITY] Preview path traversal attempt blocked: ${filePath} -> ${resolvedPath}`);
+    return NextResponse.json({ error: 'Path not allowed' }, { status: 403 });
+  }
+
+  try {
+    const content = readFileSync(resolvedPath, 'utf-8');
     return new NextResponse(content, {
       headers: {
         'Content-Type': 'text/html',
+        // Sandbox the preview to prevent scripts from accessing the parent origin
+        'Content-Security-Policy': "default-src 'self'; script-src 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'self'",
       },
     });
   } catch (error) {

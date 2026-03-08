@@ -40,15 +40,16 @@ mc_patch() {
     -d "$2" 2>/dev/null
 }
 
-# Find agent ID by name (case-insensitive via jq)
+# Find agent ID by name (case-insensitive)
 find_agent_id() {
   local name="$1"
   local agents
   agents=$(mc_get "/api/agents") || { echo "⚠️  Mission Control unreachable" >&2; return 1; }
-  echo "$agents" | python3 -c "
-import json, sys
+  # Pass name via env var to prevent shell injection through Python string interpolation
+  echo "$agents" | AGENT_NAME="$name" python3 -c "
+import json, sys, os
 agents = json.load(sys.stdin)
-name = '${name}'.lower()
+name = os.environ['AGENT_NAME'].lower()
 for a in agents:
     if a['name'].lower() == name:
         print(a['id'])
@@ -81,20 +82,21 @@ cmd_agent_start() {
   local agent_id
   agent_id=$(find_agent_id "$agent") || { echo "❌ Agent not found: $agent" >&2; exit 1; }
 
-  # Create task
+  # Create task — pass values via env vars to prevent shell injection
   local body
-  body=$(python3 -c "
-import json
+  body=$(TASK_TITLE="$task" TASK_PRIORITY="$priority" TASK_AGENT_ID="$agent_id" TASK_DESC="$description" python3 -c "
+import json, os
 d = {
-    'title': $(python3 -c "import json; print(json.dumps('$task'))"),
+    'title': os.environ['TASK_TITLE'],
     'status': 'in_progress',
-    'priority': '$priority',
-    'assigned_agent_id': '$agent_id',
-    'created_by_agent_id': '$agent_id',
+    'priority': os.environ['TASK_PRIORITY'],
+    'assigned_agent_id': os.environ['TASK_AGENT_ID'],
+    'created_by_agent_id': os.environ['TASK_AGENT_ID'],
     'workspace_id': 'default'
 }
-if '$description':
-    d['description'] = $(python3 -c "import json; print(json.dumps('$description'))")
+desc = os.environ.get('TASK_DESC', '')
+if desc:
+    d['description'] = desc
 print(json.dumps(d))
 ")
 
