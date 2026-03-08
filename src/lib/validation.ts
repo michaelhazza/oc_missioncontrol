@@ -10,6 +10,7 @@ const TaskStatus = z.enum([
   'testing',
   'review',
   'verification',
+  'blocked',
   'done'
 ]);
 

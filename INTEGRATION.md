@@ -140,7 +140,7 @@ Editable via Settings page → OpenClaw Integration → State Mapping editor.
 ### Requires Follow-Up
 1. **Agent correlationId echoing** — Agents must include the correlationId in completion responses for reliable round-trip matching. This is NOT currently enforced in agent prompt templates. The sync listener falls back to content-based matching if correlationId is missing. **Action required:** Update agent prompt templates to enforce correlationId echoing.
 2. **Agent capabilities from gateway** — The `capabilities` field on agents is currently manual entry only. The `agents.list` RPC response should be verified against the OpenClaw RPC surface when the agent team is fully configured. If the gateway includes capabilities metadata, import logic should be updated to populate this field automatically.
-3. **State mapping "blocked" status** — The default mapping maps `"failed"` to `"blocked"`, but Mission Control does not have a formal "blocked" status in the CHECK constraint. This is stored as a text value in `sync_status` context and may need a schema update if "blocked" needs to be a first-class task status.
+3. ~~**State mapping "blocked" status**~~ — **Resolved.** `"blocked"` is now a first-class task status in the CHECK constraint (Migration 019), the `TaskStatus` type, the Zod validation schema, and the Mission Queue board UI.
 
 ## Webhook Setup
 

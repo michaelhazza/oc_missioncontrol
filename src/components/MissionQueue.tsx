@@ -22,6 +22,7 @@ const COLUMNS: { id: TaskStatus; label: string; color: string }[] = [
   { id: 'testing', label: 'Testing', color: 'border-t-mc-accent-cyan' },
   { id: 'review', label: 'Review', color: 'border-t-mc-accent-purple' },
   { id: 'verification', label: 'Verification', color: 'border-t-orange-500' },
+  { id: 'blocked', label: 'Blocked', color: 'border-t-red-500' },
   { id: 'done', label: 'Done', color: 'border-t-mc-accent-green' },
 ];
 

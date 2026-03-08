@@ -724,6 +724,66 @@ const migrations: Migration[] = [
       }
       console.log('[Migration 018] Gateway tracking columns added to content_items');
     }
+  },
+  {
+    id: '019',
+    name: 'add_blocked_task_status',
+    up: (db) => {
+      console.log('[Migration 019] Adding blocked status to tasks CHECK constraint...');
+
+      const taskSchema = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='tasks'").get() as { sql: string } | undefined;
+      if (taskSchema && taskSchema.sql.includes("'blocked'")) {
+        console.log('[Migration 019] blocked status already present — skipping');
+        return;
+      }
+
+      // Get current column names
+      const cols = (db.prepare("PRAGMA table_info(tasks)").all() as { name: string }[]).map(c => c.name);
+      const colList = cols.join(', ');
+
+      db.exec(`ALTER TABLE tasks RENAME TO _tasks_old_019`);
+      db.exec(`
+        CREATE TABLE tasks (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          description TEXT,
+          status TEXT DEFAULT 'inbox' CHECK (status IN ('pending_dispatch', 'planning', 'inbox', 'assigned', 'in_progress', 'testing', 'review', 'verification', 'blocked', 'done')),
+          priority TEXT DEFAULT 'normal' CHECK (priority IN ('low', 'normal', 'high', 'urgent')),
+          assigned_agent_id TEXT REFERENCES agents(id),
+          created_by_agent_id TEXT REFERENCES agents(id),
+          workspace_id TEXT DEFAULT 'default' REFERENCES workspaces(id),
+          business_id TEXT DEFAULT 'default',
+          due_date TEXT,
+          workflow_template_id TEXT REFERENCES workflow_templates(id),
+          planning_session_key TEXT,
+          planning_messages TEXT,
+          planning_complete INTEGER DEFAULT 0,
+          planning_spec TEXT,
+          planning_agents TEXT,
+          planning_dispatch_error TEXT,
+          status_reason TEXT,
+          gateway_task_id TEXT,
+          sync_status TEXT DEFAULT 'local' CHECK (sync_status IN ('local', 'synced', 'pending_sync', 'sync_failed')),
+          retry_count INTEGER DEFAULT 0,
+          last_sync_attempt TEXT,
+          gateway_completion_notes TEXT,
+          created_at TEXT DEFAULT (datetime('now')),
+          updated_at TEXT DEFAULT (datetime('now'))
+        )
+      `);
+
+      db.exec(`INSERT INTO tasks (${colList}) SELECT ${colList} FROM _tasks_old_019`);
+      db.exec(`DROP TABLE _tasks_old_019`);
+
+      // Recreate indexes
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_assigned ON tasks(assigned_agent_id)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_workspace ON tasks(workspace_id)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_sync_status ON tasks(sync_status)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_gateway_task_id ON tasks(gateway_task_id)`);
+
+      console.log('[Migration 019] Tasks table recreated with blocked status');
+    }
   }
 ];
 

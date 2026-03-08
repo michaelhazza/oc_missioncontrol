@@ -42,6 +42,7 @@ export async function GET(request: NextRequest) {
           testing: 0,
           review: 0,
           verification: 0,
+          blocked: 0,
           done: 0,
           total: 0
         };
