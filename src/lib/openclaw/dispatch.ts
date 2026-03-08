@@ -57,10 +57,14 @@ export async function dispatchTaskToGateway(taskId: string): Promise<DispatchRes
     return { success: false, correlationId, error: 'Assigned agent not found' };
   }
 
-  // Store the correlationId before attempting dispatch
+  // Store the correlationId before attempting dispatch.
+  // correlation_id is stable across retries; gateway_task_id may be updated
+  // by OpenClaw on each dispatch attempt.
+  const existingCorrelationId = task.correlation_id;
+  const finalCorrelationId = existingCorrelationId || correlationId;
   run(
-    'UPDATE tasks SET gateway_task_id = ?, last_sync_attempt = ?, updated_at = ? WHERE id = ?',
-    [correlationId, now, now, taskId],
+    'UPDATE tasks SET correlation_id = COALESCE(correlation_id, ?), gateway_task_id = ?, last_sync_attempt = ?, updated_at = ? WHERE id = ?',
+    [finalCorrelationId, correlationId, now, now, taskId],
   );
 
   // Attempt gateway dispatch
@@ -93,7 +97,7 @@ export async function dispatchTaskToGateway(taskId: string): Promise<DispatchRes
 
     // Build the structured task message with correlationId
     const priorityEmoji: Record<string, string> = { low: '🔵', normal: '⚪', high: '🟡', urgent: '🔴' };
-    const taskMessage = buildTaskMessage(task, agent, correlationId, priorityEmoji[task.priority] || '⚪');
+    const taskMessage = buildTaskMessage(task, agent, finalCorrelationId, priorityEmoji[task.priority] || '⚪');
 
     // Send via chat.send RPC
     const prefix = agent.session_key_prefix || 'agent:main:';
@@ -117,7 +121,7 @@ export async function dispatchTaskToGateway(taskId: string): Promise<DispatchRes
       [
         uuidv4(), 'task_dispatched', agent.id, taskId,
         `Task "${task.title}" dispatched to ${agent.name} via gateway`,
-        JSON.stringify({ correlationId, sessionKey }),
+        JSON.stringify({ correlationId: finalCorrelationId, sessionKey }),
         now,
       ],
     );
@@ -126,7 +130,7 @@ export async function dispatchTaskToGateway(taskId: string): Promise<DispatchRes
     const updatedTask = queryOne<Task>('SELECT * FROM tasks WHERE id = ?', [taskId]);
     if (updatedTask) broadcast({ type: 'task_updated', payload: updatedTask });
 
-    return { success: true, correlationId };
+    return { success: true, correlationId: finalCorrelationId };
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : 'Unknown dispatch error';
     console.error(`[Dispatch] Failed to dispatch task ${taskId}:`, errorMsg);
@@ -157,7 +161,7 @@ export async function dispatchTaskToGateway(taskId: string): Promise<DispatchRes
       payload: { taskId, sessionId: '', agentName: agent.name, summary: `Dispatch failed: ${errorMsg}` },
     });
 
-    return { success: false, correlationId, error: errorMsg };
+    return { success: false, correlationId: finalCorrelationId, error: errorMsg };
   }
 }
 

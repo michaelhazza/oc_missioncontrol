@@ -23,6 +23,8 @@ export const DEFAULT_STATE_MAPPING: Record<string, string> = {
 
 const DEFAULT_POLLING_INTERVAL = 60;
 const DEFAULT_MAX_RETRY = 5;
+const DEFAULT_STALE_TASK_THRESHOLD = 60;
+const DEFAULT_MONITOR_CRON_INTERVAL = 15;
 
 interface WorkspaceSettingsRow {
   id: string;
@@ -32,6 +34,8 @@ interface WorkspaceSettingsRow {
   polling_interval_seconds: number;
   state_mapping: string;
   max_retry_count: number;
+  stale_task_threshold_minutes: number;
+  monitor_cron_interval_minutes: number;
   created_at: string;
   updated_at: string;
 }
@@ -52,6 +56,8 @@ function rowToSettings(row: WorkspaceSettingsRow): WorkspaceSettings {
     polling_interval_seconds: row.polling_interval_seconds,
     state_mapping: mapping,
     max_retry_count: row.max_retry_count,
+    stale_task_threshold_minutes: row.stale_task_threshold_minutes ?? DEFAULT_STALE_TASK_THRESHOLD,
+    monitor_cron_interval_minutes: row.monitor_cron_interval_minutes ?? DEFAULT_MONITOR_CRON_INTERVAL,
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -78,6 +84,8 @@ export function getWorkspaceSettings(workspaceId: string): WorkspaceSettings {
     polling_interval_seconds: DEFAULT_POLLING_INTERVAL,
     state_mapping: { ...DEFAULT_STATE_MAPPING },
     max_retry_count: DEFAULT_MAX_RETRY,
+    stale_task_threshold_minutes: DEFAULT_STALE_TASK_THRESHOLD,
+    monitor_cron_interval_minutes: DEFAULT_MONITOR_CRON_INTERVAL,
     created_at: now,
     updated_at: now,
   };
@@ -104,7 +112,9 @@ export function upsertWorkspaceSettings(
     run(
       `UPDATE workspace_settings
        SET gateway_url = ?, webhook_secret = ?, polling_interval_seconds = ?,
-           state_mapping = ?, max_retry_count = ?, updated_at = ?
+           state_mapping = ?, max_retry_count = ?,
+           stale_task_threshold_minutes = ?, monitor_cron_interval_minutes = ?,
+           updated_at = ?
        WHERE workspace_id = ?`,
       [
         updates.gateway_url ?? existing.gateway_url,
@@ -112,6 +122,8 @@ export function upsertWorkspaceSettings(
         updates.polling_interval_seconds ?? existing.polling_interval_seconds,
         stateMapping,
         updates.max_retry_count ?? existing.max_retry_count,
+        updates.stale_task_threshold_minutes ?? existing.stale_task_threshold_minutes ?? DEFAULT_STALE_TASK_THRESHOLD,
+        updates.monitor_cron_interval_minutes ?? existing.monitor_cron_interval_minutes ?? DEFAULT_MONITOR_CRON_INTERVAL,
         now,
         workspaceId,
       ],
@@ -120,8 +132,8 @@ export function upsertWorkspaceSettings(
     const id = uuidv4();
     run(
       `INSERT INTO workspace_settings
-       (id, workspace_id, gateway_url, webhook_secret, polling_interval_seconds, state_mapping, max_retry_count, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, workspace_id, gateway_url, webhook_secret, polling_interval_seconds, state_mapping, max_retry_count, stale_task_threshold_minutes, monitor_cron_interval_minutes, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         workspaceId,
@@ -130,6 +142,8 @@ export function upsertWorkspaceSettings(
         updates.polling_interval_seconds ?? DEFAULT_POLLING_INTERVAL,
         stateMapping,
         updates.max_retry_count ?? DEFAULT_MAX_RETRY,
+        updates.stale_task_threshold_minutes ?? DEFAULT_STALE_TASK_THRESHOLD,
+        updates.monitor_cron_interval_minutes ?? DEFAULT_MONITOR_CRON_INTERVAL,
         now,
         now,
       ],

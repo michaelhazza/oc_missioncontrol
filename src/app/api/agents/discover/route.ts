@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { queryAll } from '@/lib/db';
 import { getOpenClawClient } from '@/lib/openclaw/client';
+import { parseAgentFrontmatter, validateAgentTopology } from '@/lib/openclaw/frontmatter';
 import type { Agent, DiscoveredAgent } from '@/lib/types';
 
 // This route must always be dynamic - it queries live Gateway state + DB
@@ -59,10 +60,11 @@ export async function GET() {
       existingAgents.map((a) => [a.gateway_agent_id, a.id])
     );
 
-    // Map gateway agents to our DiscoveredAgent type
-    const discovered: DiscoveredAgent[] = gatewayAgents.map((ga) => {
+    // Map gateway agents to our DiscoveredAgent type, with frontmatter info
+    const discovered: (DiscoveredAgent & { mc_role?: string | null; frontmatter_parse_error?: number })[] = gatewayAgents.map((ga) => {
       const gatewayId = ga.id || ga.name || '';
       const alreadyImported = importedGatewayIds.has(gatewayId);
+      const frontmatter = parseAgentFrontmatter(gatewayId);
       return {
         id: gatewayId,
         name: ga.name || ga.label || gatewayId,
@@ -72,13 +74,24 @@ export async function GET() {
         status: ga.status,
         already_imported: alreadyImported,
         existing_agent_id: alreadyImported ? importedGatewayIds.get(gatewayId) : undefined,
+        mc_role: frontmatter.mc_role,
+        frontmatter_parse_error: frontmatter.frontmatter_parse_error,
       };
     });
+
+    // Validate topology and surface warnings
+    const warnings = validateAgentTopology(
+      discovered.map(a => ({ id: a.id, mc_role: a.mc_role ?? null })),
+    );
+    for (const w of warnings) {
+      console.warn(`[Agent discovery] ${w}`);
+    }
 
     return NextResponse.json({
       agents: discovered,
       total: discovered.length,
       already_imported: discovered.filter((a) => a.already_imported).length,
+      warnings,
     });
   } catch (error) {
     console.error('Failed to discover agents:', error);

@@ -103,23 +103,45 @@ function processChatMessage(data: Record<string, unknown>): void {
 function handleCompletionByCorrelationId(correlationId: string, summary: string): void {
   const now = new Date().toISOString();
 
+  // Try matching tasks by correlation_id first, fall back to gateway_task_id
   const task = queryOne<Task>(
+    'SELECT * FROM tasks WHERE correlation_id = ?',
+    [correlationId],
+  ) ?? queryOne<Task>(
     'SELECT * FROM tasks WHERE gateway_task_id = ?',
     [correlationId],
   );
 
-  if (!task) {
-    console.warn(`[Sync] No task found for correlationId: ${correlationId}`);
+  if (task) {
+    // Don't overwrite if already in a later state
+    if (['done', 'review', 'verification'].includes(task.status)) {
+      console.log(`[Sync] Task ${task.id} already in ${task.status}, skipping completion`);
+    } else {
+      completeTask(task, summary, now);
+    }
+  }
+
+  // Also check content_items — a Generate Script dispatch stores correlation_id
+  const contentItem = queryOne<{ id: string; generation_status: string }>(
+    'SELECT id, generation_status FROM content_items WHERE correlation_id = ?',
+    [correlationId],
+  );
+
+  if (contentItem) {
+    if (contentItem.generation_status === 'generating') {
+      run(
+        `UPDATE content_items SET generation_status = ?, script = ?, updated_at = ? WHERE id = ?`,
+        ['completed', summary, now, contentItem.id],
+      );
+      broadcast({ type: 'content_updated', payload: { id: contentItem.id, generation_status: 'completed' } as unknown as import('@/lib/types').ContentItem });
+      console.log(`[Sync] Content item ${contentItem.id} generation completed`);
+    }
     return;
   }
 
-  // Don't overwrite if already in a later state
-  if (['done', 'review', 'verification'].includes(task.status)) {
-    console.log(`[Sync] Task ${task.id} already in ${task.status}, skipping completion`);
-    return;
+  if (!task && !contentItem) {
+    console.warn(`[Sync] No task or content item found for correlationId: ${correlationId}`);
   }
-
-  completeTask(task, summary, now);
 }
 
 /**

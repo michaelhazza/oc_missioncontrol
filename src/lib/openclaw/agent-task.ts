@@ -101,10 +101,13 @@ export async function createAndDispatchAgentTask(request: AgentTaskRequest): Pro
 }
 
 /**
- * Find a task by its correlationId (gateway_task_id).
+ * Find a task by its correlationId.
  */
 export function findTaskByCorrelationId(correlationId: string): Task | undefined {
   return queryOne<Task>(
+    'SELECT * FROM tasks WHERE correlation_id = ?',
+    [correlationId],
+  ) ?? queryOne<Task>(
     'SELECT * FROM tasks WHERE gateway_task_id = ?',
     [correlationId],
   );
