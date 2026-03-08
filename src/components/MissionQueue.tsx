@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Plus, ChevronRight, GripVertical, ArrowRightLeft } from 'lucide-react';
+import { Plus, ChevronRight, GripVertical, ArrowRightLeft, Eye, EyeOff } from 'lucide-react';
 import { useMissionControl } from '@/lib/store';
 import { triggerAutoDispatch, shouldTriggerAutoDispatch } from '@/lib/auto-dispatch';
 import type { Task, TaskStatus } from '@/lib/types';
@@ -23,8 +23,11 @@ const COLUMNS: { id: TaskStatus; label: string; color: string }[] = [
   { id: 'review', label: 'Review', color: 'border-t-mc-accent-purple' },
   { id: 'verification', label: 'Verification', color: 'border-t-orange-500' },
   { id: 'blocked', label: 'Blocked', color: 'border-t-red-500' },
-  { id: 'done', label: 'Done', color: 'border-t-mc-accent-green' },
 ];
+
+const DONE_COLUMN = { id: 'done' as TaskStatus, label: 'Done', color: 'border-t-mc-accent-green' };
+
+const MAX_DONE_TASKS = 50;
 
 export function MissionQueue({ workspaceId, mobileMode = false, isPortrait = true }: MissionQueueProps) {
   const { tasks, updateTaskStatus, addEvent } = useMissionControl();
@@ -33,6 +36,7 @@ export function MissionQueue({ workspaceId, mobileMode = false, isPortrait = tru
   const [draggedTask, setDraggedTask] = useState<Task | null>(null);
   const [mobileStatus, setMobileStatus] = useState<TaskStatus>('planning');
   const [statusMoveTask, setStatusMoveTask] = useState<Task | null>(null);
+  const [showDone, setShowDone] = useState(false);
 
   // Derive editingTask from the store so it updates live via SSE
   const editingTask = editingTaskId ? tasks.find(t => t.id === editingTaskId) || null : null;
@@ -104,7 +108,14 @@ export function MissionQueue({ workspaceId, mobileMode = false, isPortrait = tru
     setDraggedTask(null);
   };
 
-  const mobileTasks = getTasksByStatus(mobileStatus);
+  const mobileColumns = showDone ? [...COLUMNS, DONE_COLUMN] : COLUMNS;
+  const effectiveMobileStatus = (!showDone && mobileStatus === 'done') ? 'planning' : mobileStatus;
+  const mobileTasks = effectiveMobileStatus === 'done'
+    ? tasks
+        .filter((task) => task.status === 'done')
+        .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
+        .slice(0, MAX_DONE_TASKS)
+    : getTasksByStatus(effectiveMobileStatus);
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
@@ -113,13 +124,26 @@ export function MissionQueue({ workspaceId, mobileMode = false, isPortrait = tru
           <ChevronRight className="w-4 h-4 text-mc-text-secondary" />
           <span className="text-sm font-medium uppercase tracking-wider">Mission Queue</span>
         </div>
-        <button
-          onClick={() => setShowCreateModal(true)}
-          className="flex items-center gap-2 px-4 min-h-11 bg-mc-accent-pink text-mc-bg rounded text-sm font-medium hover:bg-mc-accent-pink/90"
-        >
-          <Plus className="w-4 h-4" />
-          New Task
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowDone(!showDone)}
+            className={`flex items-center gap-2 px-3 min-h-11 rounded text-sm font-medium transition-colors ${
+              showDone
+                ? 'bg-mc-accent-green/20 text-mc-accent-green border border-mc-accent-green/30 hover:bg-mc-accent-green/30'
+                : 'bg-mc-bg-secondary text-mc-text-secondary border border-mc-border hover:bg-mc-bg-tertiary'
+            }`}
+          >
+            {showDone ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+            {showDone ? 'Hide Done' : 'Show Done'}
+          </button>
+          <button
+            onClick={() => setShowCreateModal(true)}
+            className="flex items-center gap-2 px-4 min-h-11 bg-mc-accent-pink text-mc-bg rounded text-sm font-medium hover:bg-mc-accent-pink/90"
+          >
+            <Plus className="w-4 h-4" />
+            New Task
+          </button>
+        </div>
       </div>
 
       {!mobileMode ? (
@@ -155,21 +179,61 @@ export function MissionQueue({ workspaceId, mobileMode = false, isPortrait = tru
               </div>
             );
           })}
+
+          {showDone && (() => {
+            const doneTasks = tasks
+              .filter((task) => task.status === 'done')
+              .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime())
+              .slice(0, MAX_DONE_TASKS);
+            return (
+              <div
+                className={`flex-1 min-w-[220px] max-w-[300px] flex flex-col bg-mc-bg/60 rounded-lg border border-mc-border/30 border-t-2 ${DONE_COLUMN.color}`}
+              >
+                <div className="p-2 border-b border-mc-border/30 flex items-center justify-between">
+                  <span className="text-xs font-medium uppercase text-mc-text-secondary/60">{DONE_COLUMN.label}</span>
+                  <span className="text-xs bg-mc-bg-tertiary/50 px-2 py-0.5 rounded text-mc-text-secondary/60">{doneTasks.length}</span>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-2 space-y-2">
+                  {doneTasks.map((task) => (
+                    <TaskCard
+                      key={task.id}
+                      task={task}
+                      onDragStart={handleDragStart}
+                      onClick={() => setEditingTaskId(task.id)}
+                      onMoveStatus={() => setStatusMoveTask(task)}
+                      isDragging={false}
+                      mobileMode={false}
+                      portraitMode={false}
+                      isDone
+                    />
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
         </div>
       ) : (
         <div className={`flex-1 overflow-y-auto ${isPortrait ? 'p-3 pb-[calc(1rem+env(safe-area-inset-bottom))]' : 'p-2.5 pb-[calc(0.75rem+env(safe-area-inset-bottom))]'}`}>
           <div className={`flex gap-2 overflow-x-auto ${isPortrait ? 'pb-3' : 'pb-2'}`}>
-            {COLUMNS.map((column) => {
-              const count = getTasksByStatus(column.id).length;
-              const selected = mobileStatus === column.id;
+            {mobileColumns.map((column) => {
+              const count = column.id === 'done'
+                ? tasks.filter((t) => t.status === 'done').length
+                : getTasksByStatus(column.id).length;
+              const selected = effectiveMobileStatus === column.id;
+              const isDoneTab = column.id === 'done';
               return (
                 <button
                   key={column.id}
                   onClick={() => setMobileStatus(column.id)}
                   className={`min-h-11 px-4 rounded-full border whitespace-nowrap ${isPortrait ? 'text-sm' : 'text-xs'} ${
                     selected
-                      ? 'bg-mc-accent text-mc-bg border-mc-accent font-medium'
-                      : 'bg-mc-bg-secondary border-mc-border text-mc-text-secondary'
+                      ? isDoneTab
+                        ? 'bg-mc-accent-green/80 text-mc-bg border-mc-accent-green font-medium'
+                        : 'bg-mc-accent text-mc-bg border-mc-accent font-medium'
+                      : isDoneTab
+                        ? 'bg-mc-bg-secondary border-mc-accent-green/30 text-mc-text-secondary/60'
+                        : 'bg-mc-bg-secondary border-mc-border text-mc-text-secondary'
                   }`}
                 >
                   {column.label} ({count})
@@ -194,6 +258,7 @@ export function MissionQueue({ workspaceId, mobileMode = false, isPortrait = tru
                   isDragging={false}
                   mobileMode
                   portraitMode={isPortrait}
+                  isDone={effectiveMobileStatus === 'done'}
                 />
               ))
             )}
@@ -242,9 +307,10 @@ interface TaskCardProps {
   isDragging: boolean;
   mobileMode: boolean;
   portraitMode?: boolean;
+  isDone?: boolean;
 }
 
-function TaskCard({ task, onDragStart, onClick, onMoveStatus, isDragging, mobileMode, portraitMode = true }: TaskCardProps) {
+function TaskCard({ task, onDragStart, onClick, onMoveStatus, isDragging, mobileMode, portraitMode = true, isDone = false }: TaskCardProps) {
   const priorityStyles = {
     low: 'text-mc-text-secondary',
     normal: 'text-mc-accent',
@@ -265,14 +331,18 @@ function TaskCard({ task, onDragStart, onClick, onMoveStatus, isDragging, mobile
 
   return (
     <div
-      draggable={!mobileMode}
+      draggable={!mobileMode && !isDone}
       onDragStart={(e) => onDragStart(e, task)}
       onClick={onClick}
-      className={`group bg-mc-bg-secondary border rounded-lg cursor-pointer transition-all hover:shadow-lg hover:shadow-black/20 ${
-        isDragging ? 'opacity-50 scale-95' : ''
-      } ${isPlanning ? 'border-purple-500/40 hover:border-purple-500' : 'border-mc-border/50 hover:border-mc-accent/40'}`}
+      className={`group border rounded-lg cursor-pointer transition-all ${
+        isDone
+          ? 'bg-mc-bg-secondary/50 border-mc-border/30 opacity-60 hover:opacity-80 hover:shadow-md hover:shadow-black/10'
+          : `bg-mc-bg-secondary hover:shadow-lg hover:shadow-black/20 ${
+              isDragging ? 'opacity-50 scale-95' : ''
+            } ${isPlanning ? 'border-purple-500/40 hover:border-purple-500' : 'border-mc-border/50 hover:border-mc-accent/40'}`
+      }`}
     >
-      {!mobileMode && (
+      {!mobileMode && !isDone && (
         <div className="flex items-center justify-center py-1.5 border-b border-mc-border/30 opacity-0 group-hover:opacity-100 transition-opacity">
           <GripVertical className="w-4 h-4 text-mc-text-secondary/50 cursor-grab" />
         </div>
