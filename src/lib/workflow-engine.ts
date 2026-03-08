@@ -228,13 +228,25 @@ export async function handleStageFailure(
   failReason: string
 ): Promise<StageTransitionResult> {
   const workflow = getTaskWorkflow(taskId);
-  if (!workflow) {
-    return { success: false, handled: false, handedOff: false, error: 'No workflow template' };
-  }
 
-  const targetStatus = workflow.fail_targets[currentStatus];
+  // Resolve the fail target: prefer workflow definition, fall back to sensible defaults
+  let targetStatus: string | undefined;
+  if (workflow) {
+    targetStatus = workflow.fail_targets[currentStatus];
+  }
+  // Default fail targets if workflow has no entry for this status:
+  // in_progress failures → review (surfaces to human); test/verify failures → in_progress (rework)
   if (!targetStatus) {
-    return { success: false, handled: false, handedOff: false, error: `No fail target defined for status: ${currentStatus}` };
+    const defaults: Record<string, string> = {
+      in_progress: 'review',
+      testing: 'in_progress',
+      review: 'in_progress',
+      verification: 'in_progress',
+    };
+    targetStatus = defaults[currentStatus];
+  }
+  if (!targetStatus) {
+    return { success: false, handled: false, handedOff: false, error: `No fail target for status: ${currentStatus}` };
   }
 
   const now = new Date().toISOString();

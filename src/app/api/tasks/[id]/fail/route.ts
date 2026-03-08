@@ -33,8 +33,8 @@ export async function POST(
       return NextResponse.json({ error: 'Task not found' }, { status: 404 });
     }
 
-    // Only allow failure from testing, review, or verification stages
-    const failableStatuses = ['testing', 'review', 'verification'];
+    // Allow failure from any active working stage, including in_progress (builder failure)
+    const failableStatuses = ['in_progress', 'testing', 'review', 'verification'];
     if (!failableStatuses.includes(task.status)) {
       return NextResponse.json(
         { error: `Cannot fail from status: ${task.status}. Must be in ${failableStatuses.join(', ')}` },

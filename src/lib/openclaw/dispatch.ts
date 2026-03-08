@@ -245,5 +245,7 @@ ${agent.mattermost_channel ? `Use \`deliverable_type: "url"\` to record the Matt
 \`TASK_COMPLETE[${correlationId}]: [one-line summary of what you did]\`
 
 The correlationId \`${correlationId}\` is required for Mission Control to detect completion. Do not omit or alter it.
-Do not send any other messages after completion. Do not report back to any agent or ask for confirmation.`;
+Do not send any other messages after completion. Do not report back to any agent or ask for confirmation.
+
+**If you cannot complete the task** (blocker, missing info, unrecoverable error): call \`POST ${mcUrl}/api/tasks/${task.id}/fail\` with \`{"reason": "description of the blocker"}\` and stop.`;
 }

@@ -242,6 +242,8 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
 Then end your response with this exact line:
 \`TASK_COMPLETE[${correlationId}]: [one-line summary of what you did]\`
 
+**If you cannot complete the task** (blocker, missing info, error): call POST ${missionControlUrl}/api/tasks/${task.id}/fail with {"reason": "description of the blocker"} and stop.
+
 Do not send any other messages after this. Do not ask for feedback or confirmation.`;
     } else if (isTester) {
       completionInstructions = `**YOUR ROLE: TESTER** — Test the deliverables for this task.

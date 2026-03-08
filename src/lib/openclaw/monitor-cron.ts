@@ -9,10 +9,12 @@
  * Uses setInterval — not node-cron.
  */
 
-import { queryAll, queryOne } from '@/lib/db';
+import { queryAll, queryOne, run } from '@/lib/db';
+import { v4 as uuidv4 } from 'uuid';
 import { getOpenClawClient } from './client';
 import { getWorkspaceSettings } from './workspace-settings';
-import type { Agent } from '@/lib/types';
+import { broadcast } from '@/lib/events';
+import type { Agent, Task } from '@/lib/types';
 
 let monitorInterval: NodeJS.Timeout | null = null;
 
@@ -76,18 +78,59 @@ async function runStaleTaskCheck(): Promise<void> {
 
   if (staleTasks.length === 0) return; // Nothing stale
 
-  console.log(`[MonitorCron] Found ${staleTasks.length} stale tasks, notifying monitor agent`);
+  const now = new Date().toISOString();
 
-  const message = formatStaleTaskMessage(staleTasks);
+  // Split into two buckets:
+  // - 1x–2x threshold overdue: nudge via monitor agent (one message, no LLM escalation)
+  // - >2x threshold overdue: auto-fail directly in MC — no LLM call needed
+  const nudgeTasks: StaleTaskRow[] = [];
+  const autoFailTasks: StaleTaskRow[] = [];
+
+  for (const t of staleTasks) {
+    if (t.minutes_overdue > thresholdMinutes * 2) {
+      autoFailTasks.push(t);
+    } else {
+      nudgeTasks.push(t);
+    }
+  }
+
+  // Auto-fail tasks that have been stale for >2× threshold — no LLM needed
+  for (const t of autoFailTasks) {
+    const reason = `Auto-failed: agent unresponsive for ${Math.round(t.minutes_overdue)} minutes (threshold: ${thresholdMinutes * 2} min)`;
+    console.log(`[MonitorCron] Auto-failing stale task ${t.id}: ${reason}`);
+    run(
+      'UPDATE tasks SET status = ?, status_reason = ?, sync_status = ?, updated_at = ? WHERE id = ?',
+      ['review', reason, 'failed', now, t.id],
+    );
+    // Free the agent back to standby
+    const task = queryOne<Task>('SELECT assigned_agent_id FROM tasks WHERE id = ?', [t.id]);
+    if (task?.assigned_agent_id) {
+      run('UPDATE agents SET status = ?, updated_at = ? WHERE id = ?', ['standby', now, task.assigned_agent_id]);
+    }
+    // Log the auto-fail event
+    run(
+      `INSERT INTO events (id, type, task_id, message, created_at) VALUES (?, ?, ?, ?, ?)`,
+      [uuidv4(), 'task_auto_failed', t.id, reason, now],
+    );
+    // Broadcast so the UI updates immediately
+    const updated = queryOne<Task>('SELECT * FROM tasks WHERE id = ?', [t.id]);
+    if (updated) broadcast({ type: 'task_updated', payload: updated });
+  }
+
+  // Only nudge the first-cycle stale tasks (1x–2x threshold) via the monitor agent
+  if (nudgeTasks.length === 0) return;
+
+  console.log(`[MonitorCron] Nudging ${nudgeTasks.length} stale task(s) via monitor agent`);
+
+  const message = formatStaleTaskMessage(nudgeTasks);
 
   try {
     const client = getOpenClawClient();
     if (!client.isConnected()) {
-      console.warn('[MonitorCron] Gateway not connected, skipping monitor dispatch');
+      console.warn('[MonitorCron] Gateway not connected, skipping monitor nudge');
       return;
     }
 
-    // Build session key for the monitor agent
     const prefix = monitorAgent.session_key_prefix || 'agent:main:';
     const sessionKey = `${prefix}mission-control-monitor`;
 
