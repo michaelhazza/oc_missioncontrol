@@ -40,7 +40,6 @@ export interface Agent {
   source: AgentSource;
   gateway_agent_id?: string;
   session_key_prefix?: string;
-  capabilities?: string[];
   mc_role?: 'orchestrator' | 'specialist' | 'monitor' | null;
   frontmatter_parse_error?: number;
   created_at: string;
