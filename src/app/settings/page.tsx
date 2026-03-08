@@ -76,11 +76,24 @@ export default function SettingsPage() {
     }
   }, []);
 
+  const loadTopologyWarnings = useCallback(async () => {
+    try {
+      const res = await fetch('/api/agents/sync-frontmatter');
+      if (res.ok) {
+        const data = await res.json();
+        setDiscoveryWarnings(data.warnings || []);
+      }
+    } catch {
+      // Non-critical — warnings just won't show on load
+    }
+  }, []);
+
   useEffect(() => {
     setConfig(getConfig());
     checkGatewayStatus();
     loadIntegrationSettings();
-  }, [checkGatewayStatus, loadIntegrationSettings]);
+    loadTopologyWarnings();
+  }, [checkGatewayStatus, loadIntegrationSettings, loadTopologyWarnings]);
 
   const handleSave = async () => {
     if (!config) return;

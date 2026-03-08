@@ -6,6 +6,25 @@ import type { Agent } from '@/lib/types';
 export const dynamic = 'force-dynamic';
 
 /**
+ * GET /api/agents/sync-frontmatter
+ *
+ * Returns current agent topology warnings from the DB without re-parsing
+ * SOUL.md files. Used by the Settings page on initial load.
+ */
+export async function GET() {
+  try {
+    const agents = queryAll<{ id: string; mc_role: string | null }>(
+      `SELECT id, mc_role FROM agents WHERE source = 'gateway'`,
+    );
+    const warnings = validateAgentTopology(agents);
+    return NextResponse.json({ warnings });
+  } catch (error) {
+    console.error('Failed to check agent topology:', error);
+    return NextResponse.json({ warnings: [] });
+  }
+}
+
+/**
  * POST /api/agents/sync-frontmatter
  *
  * Re-reads SOUL.md frontmatter for all gateway-imported agents and updates
