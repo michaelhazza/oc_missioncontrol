@@ -39,8 +39,8 @@ export async function POST(request: NextRequest) {
     const now = new Date().toISOString();
 
     run(
-      `INSERT INTO agents (id, name, role, description, avatar_emoji, is_master, workspace_id, soul_md, user_md, agents_md, model, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO agents (id, name, role, description, avatar_emoji, is_master, workspace_id, soul_md, user_md, agents_md, model, mattermost_channel, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         body.name,
@@ -53,6 +53,7 @@ export async function POST(request: NextRequest) {
         body.user_md || null,
         body.agents_md || null,
         body.model || null,
+        body.mattermost_channel || null,
         now,
         now,
       ]

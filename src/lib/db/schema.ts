@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS agents (
   source TEXT DEFAULT 'local',
   gateway_agent_id TEXT,
   session_key_prefix TEXT,
+  mattermost_channel TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );

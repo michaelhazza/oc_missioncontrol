@@ -80,6 +80,8 @@ export function DiscoverAgentsModal({ onClose, workspaceId }: DiscoverAgentsModa
         .map((a) => ({
           gateway_agent_id: a.id,
           name: a.name,
+          // Use label as a role hint if provided by the gateway
+          role: a.label || undefined,
           model: a.model,
           workspace_id: workspaceId || 'default',
         }));
@@ -244,7 +246,7 @@ export function DiscoverAgentsModal({ onClose, workspaceId }: DiscoverAgentsModa
                       </div>
 
                       {/* Avatar */}
-                      <span className="text-2xl">{isImported ? '🔗' : '🤖'}</span>
+                      <span className="text-2xl">🤖</span>
 
                       {/* Info */}
                       <div className="flex-1 min-w-0">

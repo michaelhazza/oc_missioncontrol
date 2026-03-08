@@ -42,6 +42,7 @@ export interface Agent {
   session_key_prefix?: string;
   mc_role?: 'orchestrator' | 'specialist' | 'monitor' | null;
   frontmatter_parse_error?: number;
+  mattermost_channel?: string;
   created_at: string;
   updated_at: string;
 }
@@ -348,6 +349,7 @@ export interface CreateAgentRequest {
   user_md?: string;
   agents_md?: string;
   model?: string;
+  mattermost_channel?: string;
 }
 
 export interface UpdateAgentRequest extends Partial<CreateAgentRequest> {

@@ -8,6 +8,8 @@ export const dynamic = 'force-dynamic';
 interface ImportAgentRequest {
   gateway_agent_id: string;
   name: string;
+  role?: string;
+  avatar_emoji?: string;
   model?: string;
   workspace_id?: string;
 }
@@ -99,15 +101,20 @@ export async function POST(request: NextRequest) {
         // Parse SOUL.md frontmatter for mc_role
         const frontmatter = parseAgentFrontmatter(agentReq.gateway_agent_id);
 
+        // Derive role: explicit import request > frontmatter mc_role > agent name (persona)
+        const resolvedRole = agentReq.role
+          || (frontmatter.mc_role ? frontmatter.mc_role : null)
+          || agentReq.name;
+
         run(
           `INSERT INTO agents (id, name, role, description, avatar_emoji, is_master, workspace_id, soul_md, user_md, agents_md, model, source, gateway_agent_id, mc_role, frontmatter_parse_error, created_at, updated_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             id,
             agentReq.name,
-            'Imported Agent',
+            resolvedRole,
             `Imported from OpenClaw Gateway (${agentReq.gateway_agent_id})`,
-            '🔗',
+            agentReq.avatar_emoji || '🤖',
             0,
             workspaceId,
             soulMd,

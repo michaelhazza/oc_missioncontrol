@@ -89,6 +89,10 @@ export async function PATCH(
       updates.push('model = ?');
       values.push(body.model);
     }
+    if (body.mattermost_channel !== undefined) {
+      updates.push('mattermost_channel = ?');
+      values.push(body.mattermost_channel || null);
+    }
 
     if (updates.length === 0) {
       return NextResponse.json({ error: 'No updates provided' }, { status: 400 });
