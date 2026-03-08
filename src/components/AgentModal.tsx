@@ -50,6 +50,7 @@ export function AgentModal({ agent, onClose, workspaceId, onAgentCreated }: Agen
     status: (agent?.status || 'standby') as AgentStatus,
     is_master: agent?.is_master || false,
     model: agent?.model || '',
+    mattermost_channel: agent?.mattermost_channel || '',
   });
 
   // Load available models
@@ -113,6 +114,7 @@ export function AgentModal({ agent, onClose, workspaceId, onAgentCreated }: Agen
           soul_md: null,
           user_md: null,
           agents_md: null,
+          mattermost_channel: form.mattermost_channel || null,
           workspace_id: workspaceId || agent?.workspace_id || 'default',
         }),
       });
@@ -363,6 +365,27 @@ export function AgentModal({ agent, onClose, workspaceId, onAgentCreated }: Agen
                     ))}
                   </select>
                 )}
+              </div>
+
+              {/* Mattermost output channel */}
+              <div>
+                <label className="block text-sm font-medium mb-1">
+                  Mattermost Output Channel
+                  <span className="ml-2 text-xs text-mc-text-secondary font-normal">optional</span>
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-mc-text-secondary text-sm">#</span>
+                  <input
+                    type="text"
+                    value={form.mattermost_channel}
+                    onChange={(e) => setForm({ ...form, mattermost_channel: e.target.value.replace(/^#/, '') })}
+                    placeholder="e.g. research-output"
+                    className="w-full min-h-11 bg-mc-bg border border-mc-border rounded pl-7 pr-3 py-2 text-sm focus:outline-none focus:border-mc-accent"
+                  />
+                </div>
+                <p className="text-xs text-mc-text-secondary mt-1">
+                  When set, agents are instructed to post output here and log the post URL as a deliverable.
+                </p>
               </div>
 
               {/* Gateway link */}

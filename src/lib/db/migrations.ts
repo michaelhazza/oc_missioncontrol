@@ -878,6 +878,18 @@ const migrations: Migration[] = [
       db.exec("CREATE INDEX IF NOT EXISTS idx_tasks_cron_job_id ON tasks(cron_job_id)");
       console.log('[Migration 025] Task intake columns added');
     }
+  },
+  {
+    id: '026',
+    name: 'add_mattermost_channel_to_agents',
+    up: (db) => {
+      console.log('[Migration 026] Adding mattermost_channel to agents...');
+      const columns = db.prepare("PRAGMA table_info(agents)").all() as { name: string }[];
+      if (!columns.some(c => c.name === 'mattermost_channel')) {
+        db.exec("ALTER TABLE agents ADD COLUMN mattermost_channel TEXT");
+      }
+      console.log('[Migration 026] mattermost_channel added to agents');
+    }
   }
 ];
 

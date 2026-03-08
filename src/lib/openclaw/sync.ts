@@ -118,10 +118,13 @@ function handleCompletionByCorrelationId(correlationId: string, summary: string,
   );
 
   if (task) {
-    // Don't overwrite if already in a later state
-    if (['done', 'review', 'verification'].includes(task.status)) {
+    // Don't overwrite if already at or past the testing stage
+    if (['testing', 'review', 'verification', 'done'].includes(task.status)) {
       console.log(`[Sync] Task ${task.id} already in ${task.status}, skipping completion`);
     } else {
+      if (task.status === 'inbox' || task.status === 'assigned') {
+        console.warn(`[Sync] Task ${task.id} completed from '${task.status}' without passing through 'in_progress' — agent may have missed the status update API call`);
+      }
       completeTask(task, summary, now);
     }
   }

@@ -16,7 +16,6 @@ import { v4 as uuidv4 } from 'uuid';
 import { queryOne, run } from '@/lib/db';
 import { getOpenClawClient } from '@/lib/openclaw/client';
 import { broadcast } from '@/lib/events';
-import { getWorkspaceSettings } from './workspace-settings';
 import type { Task, Agent, OpenClawSession } from '@/lib/types';
 
 export interface DispatchResult {
@@ -194,6 +193,10 @@ export async function retryDispatch(taskId: string, maxRetries: number): Promise
 
 /**
  * Build the structured message sent to the agent via chat.send.
+ *
+ * The message is intentionally lean — the full brief lives in MC and the
+ * agent must fetch it via GET /api/tasks/{id} before starting work. This
+ * keeps LLM context tight and MC as the single source of truth.
  */
 function buildTaskMessage(
   task: Task & { assigned_agent_name?: string },
@@ -201,19 +204,52 @@ function buildTaskMessage(
   correlationId: string,
   priorityEmoji: string,
 ): string {
-  const settings = getWorkspaceSettings(task.workspace_id);
+  const mcUrl = (process.env.MISSION_CONTROL_URL || 'http://localhost:4000').replace(/\/$/, '');
 
-  return `${priorityEmoji} **NEW TASK DISPATCHED**
+  const mattermostLine = agent.mattermost_channel
+    ? `\n**Output channel:** Post final output to Mattermost \`#${agent.mattermost_channel}\`, then log the post URL as a deliverable (step 3 below).`
+    : '';
 
-**Title:** ${task.title}
-${task.description ? `**Description:** ${task.description}\n` : ''}**Priority:** ${task.priority.toUpperCase()}
-${task.due_date ? `**Due:** ${task.due_date}\n` : ''}**Task ID:** ${task.id}
-**Correlation ID:** ${correlationId}
+  const masterDelegationNote = agent.is_master
+    ? `\n**As orchestrator:** When you delegate this task to a specialist, first update the task status to \`assigned\` and set \`assigned_agent_id\` to the specialist's MC agent ID (step 1a below), then move it to \`in_progress\` once they begin.`
+    : '';
+
+  return `${priorityEmoji} **TASK ASSIGNED**
+
+**Task:** ${task.title}
+**Task ID:** \`${task.id}\`
+**Full brief:** ${mcUrl}/api/tasks/${task.id}
+${task.due_date ? `**Due:** ${task.due_date}\n` : ''}
+Fetch the full brief via \`GET ${mcUrl}/api/tasks/${task.id}\` before starting work. The \`description\` and \`brief\` fields contain all context and acceptance criteria.${mattermostLine}${masterDelegationNote}
 
 ---
 
-**IMPORTANT:** When you complete this task, include the following in your response:
-\`TASK_COMPLETE[${correlationId}]: [brief summary of what you did]\`
+**MANDATORY API CALLS — execute in this order:**
 
-This correlation ID is required for Mission Control to track your work.`;
+1. **Mark as in progress** immediately when you begin (before any work):
+\`\`\`
+PATCH ${mcUrl}/api/tasks/${task.id}
+Content-Type: application/json
+{ "status": "in_progress" }
+\`\`\`
+${agent.is_master ? `\n1a. **When delegating to a specialist**, set assigned agent first:\n\`\`\`\nPATCH ${mcUrl}/api/tasks/${task.id}\nContent-Type: application/json\n{ "status": "assigned", "assigned_agent_id": "<specialist_mc_agent_id>" }\n\`\`\`\n` : ''}
+2. **Log activity** as you work (call as many times as needed):
+\`\`\`
+POST ${mcUrl}/api/tasks/${task.id}/activities
+Content-Type: application/json
+{ "activity_type": "updated", "message": "<what you are doing>" }
+\`\`\`
+
+3. **Log deliverables** for each output (file path, URL, or artifact):
+\`\`\`
+POST ${mcUrl}/api/tasks/${task.id}/deliverables
+Content-Type: application/json
+{ "deliverable_type": "url", "title": "<output title>", "path": "<url or file path>", "description": "<optional>" }
+\`\`\`
+${agent.mattermost_channel ? `Use \`deliverable_type: "url"\` to record the Mattermost post URL from \`#${agent.mattermost_channel}\`.` : ''}
+
+4. **Signal completion** — include this exact string in your final response:
+\`TASK_COMPLETE[${correlationId}]: [one-line summary of what you did]\`
+
+The correlationId \`${correlationId}\` is required for Mission Control to detect completion. Do not omit or alter it.`;
 }
