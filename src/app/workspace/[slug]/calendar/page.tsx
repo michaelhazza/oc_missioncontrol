@@ -17,6 +17,11 @@ interface CalendarEvent {
   type: 'task' | 'cron';
   status?: string;
   color: string;
+  // Cron-specific fields
+  expression?: string;
+  agentId?: string | null;
+  description?: string | null;
+  time?: string;
 }
 
 export default function CalendarPage() {
@@ -48,8 +53,12 @@ export default function CalendarPage() {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [tasksRes] = await Promise.all([
+      const year = currentMonth.getFullYear();
+      const month = currentMonth.getMonth() + 1;
+
+      const [tasksRes, cronRes] = await Promise.all([
         fetch(`/api/tasks?workspace_id=${workspaceId}`),
+        fetch(`/api/cron?year=${year}&month=${month}`),
       ]);
 
       const allEvents: CalendarEvent[] = [];
@@ -70,13 +79,31 @@ export default function CalendarPage() {
         }
       }
 
+      if (cronRes.ok) {
+        const cronData = await cronRes.json();
+        for (const ce of cronData.events ?? []) {
+          allEvents.push({
+            id: ce.id,
+            title: ce.label,
+            date: new Date(ce.date + 'T00:00:00'),
+            type: 'cron',
+            status: 'cron',
+            color: STATUS_COLORS['cron'],
+            expression: ce.expression,
+            agentId: ce.agentId,
+            description: ce.description,
+            time: ce.time,
+          });
+        }
+      }
+
       setEvents(allEvents);
     } catch (e) {
       console.error(e);
     } finally {
       setLoading(false);
     }
-  }, [workspaceId]);
+  }, [workspaceId, currentMonth]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -150,6 +177,10 @@ export default function CalendarPage() {
               <span className="text-xs text-mc-text-secondary capitalize">{status.replace('_', ' ')}</span>
             </div>
           ))}
+          <div className="flex items-center gap-1.5">
+            <div className="w-2.5 h-2.5 rounded-full bg-orange-400/70" />
+            <span className="text-xs text-mc-text-secondary">Cron jobs</span>
+          </div>
         </div>
 
         {loading ? (
@@ -215,16 +246,35 @@ export default function CalendarPage() {
             ) : (
               <div className="space-y-2">
                 {selectedDayEvents.map(event => (
-                  <div key={event.id} className="flex items-center gap-3 text-sm">
-                    {event.type === 'task' ? (
-                      <CheckSquare className="w-4 h-4 text-mc-accent shrink-0" />
+                  <div key={event.id} className="text-sm">
+                    {event.type === 'cron' ? (
+                      <div>
+                        <div className="flex items-center gap-3">
+                          <Clock className="w-4 h-4 text-orange-400 shrink-0" />
+                          <span className="text-mc-text font-medium">{event.title}</span>
+                          {event.time && (
+                            <span className="ml-auto text-xs text-mc-text-secondary">{event.time}</span>
+                          )}
+                        </div>
+                        <div className="ml-7 mt-0.5">
+                          <span className="text-xs text-mc-text-secondary font-mono">{event.expression}</span>
+                          {event.agentId && (
+                            <span className="text-xs text-mc-text-secondary"> · agent: {event.agentId}</span>
+                          )}
+                        </div>
+                        {event.description && (
+                          <div className="ml-7 mt-0.5 text-xs text-mc-text-secondary">{event.description}</div>
+                        )}
+                      </div>
                     ) : (
-                      <Clock className="w-4 h-4 text-orange-400 shrink-0" />
+                      <div className="flex items-center gap-3">
+                        <CheckSquare className="w-4 h-4 text-mc-accent shrink-0" />
+                        <span className="text-mc-text">{event.title}</span>
+                        <span className={`text-xs px-2 py-0.5 rounded-full text-white ${event.color}`}>
+                          {event.status}
+                        </span>
+                      </div>
                     )}
-                    <span className="text-mc-text">{event.title}</span>
-                    <span className={`text-xs px-2 py-0.5 rounded-full text-white ${event.color}`}>
-                      {event.status}
-                    </span>
                   </div>
                 ))}
               </div>
