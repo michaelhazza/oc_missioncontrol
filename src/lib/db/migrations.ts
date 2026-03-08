@@ -852,6 +852,32 @@ const migrations: Migration[] = [
       }
       console.log('[Migration 024] Capabilities column dropped from agents');
     }
+  },
+  {
+    id: '025',
+    name: 'add_task_intake_columns',
+    up: (db) => {
+      console.log('[Migration 025] Adding task intake columns (brief, trigger_type, trigger_source, cron_job_id)...');
+
+      const columns = db.prepare("PRAGMA table_info(tasks)").all() as { name: string }[];
+      const hasColumn = (name: string) => columns.some(c => c.name === name);
+
+      if (!hasColumn('brief')) {
+        db.exec("ALTER TABLE tasks ADD COLUMN brief TEXT");
+      }
+      if (!hasColumn('trigger_type')) {
+        db.exec("ALTER TABLE tasks ADD COLUMN trigger_type TEXT DEFAULT 'manual'");
+      }
+      if (!hasColumn('trigger_source')) {
+        db.exec("ALTER TABLE tasks ADD COLUMN trigger_source TEXT");
+      }
+      if (!hasColumn('cron_job_id')) {
+        db.exec("ALTER TABLE tasks ADD COLUMN cron_job_id TEXT");
+      }
+
+      db.exec("CREATE INDEX IF NOT EXISTS idx_tasks_cron_job_id ON tasks(cron_job_id)");
+      console.log('[Migration 025] Task intake columns added');
+    }
   }
 ];
 

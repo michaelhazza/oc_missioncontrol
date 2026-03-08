@@ -105,6 +105,10 @@ export async function PATCH(
       updates.push('workflow_template_id = ?');
       values.push(validatedData.workflow_template_id);
     }
+    if (validatedData.brief !== undefined) {
+      updates.push('brief = ?');
+      values.push(validatedData.brief);
+    }
 
     // Track if we need to dispatch task
     let shouldDispatch = false;

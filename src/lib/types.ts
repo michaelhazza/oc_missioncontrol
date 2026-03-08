@@ -75,6 +75,11 @@ export interface Task {
   planning_complete?: number;
   planning_dispatch_error?: string;
   planning_session_key?: string;
+  // Task intake fields
+  brief?: string;
+  trigger_type?: TriggerType;
+  trigger_source?: string;
+  cron_job_id?: string;
   // Gateway integration fields
   correlation_id?: string;
   gateway_task_id?: string;
@@ -253,7 +258,9 @@ export interface OpenClawSession {
   updated_at: string;
 }
 
-export type ActivityType = 'spawned' | 'updated' | 'completed' | 'file_created' | 'status_changed';
+export type TriggerType = 'manual' | 'cron' | 'agent' | 'webhook';
+
+export type ActivityType = 'spawned' | 'updated' | 'completed' | 'file_created' | 'status_changed' | 'created' | 'assigned' | 'progress' | 'blocked' | 'note';
 
 export interface TaskActivity {
   id: string;
@@ -408,7 +415,8 @@ export type SSEEventType =
   | 'agent_spawned'
   | 'agent_completed'
   | 'content_updated'
-  | 'integration_error';
+  | 'integration_error'
+  | 'task_activity_added';
 
 export interface SSEEvent {
   type: SSEEventType;

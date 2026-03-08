@@ -276,7 +276,20 @@ function TaskCard({ task, onDragStart, onClick, onMoveStatus, isDragging, mobile
       )}
 
       <div className={portraitMode ? 'p-4' : 'p-3'}>
-        <h4 className={`font-medium leading-snug line-clamp-2 ${portraitMode ? 'text-sm mb-3' : 'text-xs mb-2'}`}>{task.title}</h4>
+        <div className="flex items-start gap-2">
+          <h4 className={`font-medium leading-snug line-clamp-2 flex-1 ${portraitMode ? 'text-sm' : 'text-xs'}`}>{task.title}</h4>
+          {task.trigger_type && task.trigger_type !== 'manual' && (
+            <span
+              className="flex-shrink-0 text-xs opacity-60"
+              title={`Triggered by: ${task.trigger_source || task.trigger_type}`}
+            >
+              {task.trigger_type === 'cron' && '\u{1F550}'}
+              {task.trigger_type === 'agent' && '\u{1F916}'}
+              {task.trigger_type === 'webhook' && '\u{1F517}'}
+            </span>
+          )}
+        </div>
+        <div className={portraitMode ? 'mt-3' : 'mt-2'} />
 
         {isPlanning && (
           <div className={`flex items-center gap-2 ${portraitMode ? 'mb-3 py-2 px-3' : 'mb-2 py-1.5 px-2.5'} bg-purple-500/10 rounded-md border border-purple-500/20`}>

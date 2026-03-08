@@ -67,6 +67,10 @@ CREATE TABLE IF NOT EXISTS tasks (
   retry_count INTEGER DEFAULT 0,
   last_sync_attempt TEXT,
   gateway_completion_notes TEXT,
+  brief TEXT,
+  trigger_type TEXT DEFAULT 'manual' CHECK (trigger_type IN ('manual', 'cron', 'agent', 'webhook')),
+  trigger_source TEXT,
+  cron_job_id TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -248,4 +252,5 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_entries_task ON knowledge_entries(task_
 CREATE INDEX IF NOT EXISTS idx_tasks_sync_status ON tasks(sync_status);
 CREATE INDEX IF NOT EXISTS idx_tasks_gateway_task_id ON tasks(gateway_task_id);
 CREATE INDEX IF NOT EXISTS idx_workspace_settings_workspace ON workspace_settings(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_cron_job_id ON tasks(cron_job_id);
 `;

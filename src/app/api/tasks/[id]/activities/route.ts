@@ -91,9 +91,19 @@ export async function POST(
       );
     }
 
-    const { activity_type, message, agent_id, metadata } = validation.data;
+    const { activity_type, message, agent_id, author, metadata } = validation.data;
 
     const db = getDb();
+
+    // Resolve agent_id from author name if agent_id not provided
+    let resolvedAgentId = agent_id || null;
+    if (!resolvedAgentId && author) {
+      const agent = db.prepare('SELECT id FROM agents WHERE name = ? OR id = ? LIMIT 1').get(author, author) as { id: string } | undefined;
+      if (agent) {
+        resolvedAgentId = agent.id;
+      }
+    }
+
     const id = crypto.randomUUID();
 
     // Insert activity
@@ -103,11 +113,27 @@ export async function POST(
     `).run(
       id,
       taskId,
-      agent_id || null,
+      resolvedAgentId,
       activity_type,
       message,
       metadata ? JSON.stringify(metadata) : null
     );
+
+    // If activity_type is 'completed', also mark the task as done
+    if (activity_type === 'completed') {
+      const now = new Date().toISOString();
+      db.prepare('UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?').run('done', now, taskId);
+
+      // Broadcast task update
+      const updatedTask = db.prepare(`
+        SELECT t.*, aa.name as assigned_agent_name, aa.avatar_emoji as assigned_agent_emoji
+        FROM tasks t LEFT JOIN agents aa ON t.assigned_agent_id = aa.id
+        WHERE t.id = ?
+      `).get(taskId);
+      if (updatedTask) {
+        broadcast({ type: 'task_updated', payload: updatedTask as any });
+      }
+    }
 
     // Get the created activity with agent info
     const activity = db.prepare(`
