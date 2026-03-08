@@ -840,6 +840,18 @@ const migrations: Migration[] = [
       }
       console.log('[Migration 023] Monitor columns added to workspace_settings');
     }
+  },
+  {
+    id: '024',
+    name: 'drop_agent_capabilities',
+    up: (db) => {
+      console.log('[Migration 024] Dropping capabilities column from agents...');
+      const agentsInfo = db.prepare("PRAGMA table_info(agents)").all() as { name: string }[];
+      if (agentsInfo.some(col => col.name === 'capabilities')) {
+        db.exec(`ALTER TABLE agents DROP COLUMN capabilities`);
+      }
+      console.log('[Migration 024] Capabilities column dropped from agents');
+    }
   }
 ];
 
