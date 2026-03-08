@@ -1,6 +1,7 @@
 /**
  * ActivityLog Component
- * Displays chronological activity log for a task
+ * Displays chronological activity log for a task.
+ * Uses SSE for live updates with polling fallback.
  */
 
 'use client';
@@ -16,8 +17,8 @@ interface ActivityLogProps {
 export function ActivityLog({ taskId }: ActivityLogProps) {
   const [activities, setActivities] = useState<TaskActivity[]>([]);
   const [loading, setLoading] = useState(true);
+  const eventSourceRef = useRef<EventSource | null>(null);
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
-  const lastCountRef = useRef(0);
 
   const loadActivities = useCallback(async (showLoading = false) => {
     try {
@@ -28,7 +29,6 @@ export function ActivityLog({ taskId }: ActivityLogProps) {
 
       if (res.ok) {
         setActivities(data);
-        lastCountRef.current = data.length;
       }
     } catch (error) {
       console.error('Failed to load activities:', error);
@@ -42,35 +42,85 @@ export function ActivityLog({ taskId }: ActivityLogProps) {
     loadActivities(true);
   }, [taskId, loadActivities]);
 
-  // Polling function
-  const pollForActivities = useCallback(async () => {
-    try {
-      const res = await fetch(`/api/tasks/${taskId}/activities`);
-      if (res.ok) {
-        const data = await res.json();
-        // Only update if there are new activities
-        if (data.length !== lastCountRef.current) {
-          setActivities(data);
-          lastCountRef.current = data.length;
-        }
-      }
-    } catch (error) {
-      console.error('Polling error:', error);
-    }
-  }, [taskId]); // setActivities is stable from React, no need to include
-
-  // Poll for new activities every 5 seconds when task is in progress
+  // SSE subscription with polling fallback
   useEffect(() => {
-    const pollInterval = setInterval(pollForActivities, 5000);
+    let cancelled = false;
 
-    pollingRef.current = pollInterval;
+    const connectSSE = () => {
+      const es = new EventSource('/api/events/stream');
+      eventSourceRef.current = es;
 
-    return () => {
+      es.onmessage = (event) => {
+        if (cancelled) return;
+        // Skip keep-alive comments
+        if (event.data.startsWith(':')) return;
+
+        try {
+          const sseEvent = JSON.parse(event.data);
+
+          // Live activity append for this task
+          if (sseEvent.type === 'activity_logged' || sseEvent.type === 'task_activity_added') {
+            const activity = sseEvent.payload as TaskActivity;
+            if (activity.task_id === taskId) {
+              setActivities((prev) => {
+                // Dedupe by id
+                if (prev.some((a) => a.id === activity.id)) return prev;
+                // Prepend (newest first)
+                return [activity, ...prev];
+              });
+            }
+          }
+        } catch {
+          // Ignore parse errors (keep-alive pings, etc.)
+        }
+      };
+
+      es.onerror = () => {
+        // SSE failed — close and fall back to polling
+        es.close();
+        eventSourceRef.current = null;
+        if (!cancelled) {
+          startPolling();
+        }
+      };
+
+      // Stop polling if SSE connects successfully
       if (pollingRef.current) {
         clearInterval(pollingRef.current);
+        pollingRef.current = null;
       }
     };
-  }, [taskId, pollForActivities]);
+
+    const startPolling = () => {
+      if (pollingRef.current) return;
+      pollingRef.current = setInterval(async () => {
+        if (cancelled) return;
+        try {
+          const res = await fetch(`/api/tasks/${taskId}/activities`);
+          if (res.ok) {
+            const data = await res.json();
+            setActivities(data);
+          }
+        } catch {
+          // Ignore polling errors
+        }
+      }, 5000);
+    };
+
+    connectSSE();
+
+    return () => {
+      cancelled = true;
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
+    };
+  }, [taskId]);
 
   const getActivityIcon = (type: string) => {
     switch (type) {
@@ -84,6 +134,16 @@ export function ActivityLog({ taskId }: ActivityLogProps) {
         return '📄';
       case 'status_changed':
         return '🔄';
+      case 'created':
+        return '📋';
+      case 'assigned':
+        return '👤';
+      case 'progress':
+        return '⏳';
+      case 'blocked':
+        return '🚫';
+      case 'note':
+        return '📝';
       default:
         return '📝';
     }
@@ -138,8 +198,8 @@ export function ActivityLog({ taskId }: ActivityLogProps) {
             {/* Metadata */}
             {activity.metadata && (
               <div className="mt-2 p-2 bg-mc-bg-tertiary rounded text-xs text-mc-text-secondary font-mono">
-                {typeof activity.metadata === 'string' 
-                  ? activity.metadata 
+                {typeof activity.metadata === 'string'
+                  ? activity.metadata
                   : JSON.stringify(JSON.parse(activity.metadata), null, 2)}
               </div>
             )}

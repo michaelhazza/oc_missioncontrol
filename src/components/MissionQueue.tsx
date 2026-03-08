@@ -29,10 +29,13 @@ const COLUMNS: { id: TaskStatus; label: string; color: string }[] = [
 export function MissionQueue({ workspaceId, mobileMode = false, isPortrait = true }: MissionQueueProps) {
   const { tasks, updateTaskStatus, addEvent } = useMissionControl();
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [draggedTask, setDraggedTask] = useState<Task | null>(null);
   const [mobileStatus, setMobileStatus] = useState<TaskStatus>('planning');
   const [statusMoveTask, setStatusMoveTask] = useState<Task | null>(null);
+
+  // Derive editingTask from the store so it updates live via SSE
+  const editingTask = editingTaskId ? tasks.find(t => t.id === editingTaskId) || null : null;
 
   const getTasksByStatus = (status: TaskStatus) => tasks.filter((task) => task.status === status);
 
@@ -141,7 +144,7 @@ export function MissionQueue({ workspaceId, mobileMode = false, isPortrait = tru
                       key={task.id}
                       task={task}
                       onDragStart={handleDragStart}
-                      onClick={() => setEditingTask(task)}
+                      onClick={() => setEditingTaskId(task.id)}
                       onMoveStatus={() => setStatusMoveTask(task)}
                       isDragging={draggedTask?.id === task.id}
                       mobileMode={false}
@@ -186,7 +189,7 @@ export function MissionQueue({ workspaceId, mobileMode = false, isPortrait = tru
                   key={task.id}
                   task={task}
                   onDragStart={handleDragStart}
-                  onClick={() => setEditingTask(task)}
+                  onClick={() => setEditingTaskId(task.id)}
                   onMoveStatus={() => setStatusMoveTask(task)}
                   isDragging={false}
                   mobileMode
@@ -199,7 +202,7 @@ export function MissionQueue({ workspaceId, mobileMode = false, isPortrait = tru
       )}
 
       {showCreateModal && <TaskModal onClose={() => setShowCreateModal(false)} workspaceId={workspaceId} />}
-      {editingTask && <TaskModal task={editingTask} onClose={() => setEditingTask(null)} workspaceId={workspaceId} />}
+      {editingTask && <TaskModal task={editingTask} onClose={() => setEditingTaskId(null)} workspaceId={workspaceId} />}
 
       {mobileMode && statusMoveTask && (
         <div className="fixed inset-0 z-50 bg-black/60 p-4 flex items-end sm:items-center sm:justify-center" onClick={() => setStatusMoveTask(null)}>
