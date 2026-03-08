@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import { queryOne, queryAll, run, transaction } from '@/lib/db';
+import { parseAgentFrontmatter, validateAgentTopology } from '@/lib/openclaw/frontmatter';
 import type { Agent } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -95,9 +96,12 @@ export async function POST(request: NextRequest) {
           'If this agent has an AGENTS.md in your OpenClaw workspace, paste its contents here.',
         ].join('\n');
 
+        // Parse SOUL.md frontmatter for mc_role
+        const frontmatter = parseAgentFrontmatter(agentReq.gateway_agent_id);
+
         run(
-          `INSERT INTO agents (id, name, role, description, avatar_emoji, is_master, workspace_id, soul_md, user_md, agents_md, model, source, gateway_agent_id, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO agents (id, name, role, description, avatar_emoji, is_master, workspace_id, soul_md, user_md, agents_md, model, source, gateway_agent_id, mc_role, frontmatter_parse_error, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             id,
             agentReq.name,
@@ -112,6 +116,8 @@ export async function POST(request: NextRequest) {
             agentReq.model || null,
             'gateway',
             agentReq.gateway_agent_id,
+            frontmatter.mc_role,
+            frontmatter.frontmatter_parse_error,
             now,
             now,
           ]
@@ -131,7 +137,16 @@ export async function POST(request: NextRequest) {
       }
     });
 
-    return NextResponse.json(results, { status: 201 });
+    // Validate topology across all imported agents
+    const allAgents = queryAll<{ id: string; mc_role: string | null }>(
+      `SELECT id, mc_role FROM agents WHERE source = 'gateway'`,
+    );
+    const warnings = validateAgentTopology(allAgents);
+    for (const w of warnings) {
+      console.warn(`[Agent import] ${w}`);
+    }
+
+    return NextResponse.json({ ...results, warnings }, { status: 201 });
   } catch (error) {
     console.error('Failed to import agents:', error);
     return NextResponse.json(

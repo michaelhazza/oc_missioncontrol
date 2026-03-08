@@ -71,11 +71,12 @@ IMPORTANT: Return ONLY the script content in your response, followed by your TAS
       },
     });
 
-    // Link the gateway task to the content item
+    // Link the correlation_id to the content item so the Layer 2 completion
+    // listener can match completion events back to this content item.
     if (content_id && result.correlationId) {
       run(
-        "UPDATE content_items SET gateway_task_id = ?, updated_at = datetime('now') WHERE id = ?",
-        [result.correlationId, content_id],
+        "UPDATE content_items SET correlation_id = ?, gateway_task_id = ?, updated_at = datetime('now') WHERE id = ?",
+        [result.correlationId, result.correlationId, content_id],
       );
     }
 

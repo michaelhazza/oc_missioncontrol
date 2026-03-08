@@ -784,6 +784,62 @@ const migrations: Migration[] = [
 
       console.log('[Migration 019] Tasks table recreated with blocked status');
     }
+  },
+  {
+    id: '020',
+    name: 'add_correlation_id_to_tasks',
+    up: (db) => {
+      console.log('[Migration 020] Adding correlation_id to tasks...');
+      const tasksInfo = db.prepare("PRAGMA table_info(tasks)").all() as { name: string }[];
+      if (!tasksInfo.some(col => col.name === 'correlation_id')) {
+        db.exec(`ALTER TABLE tasks ADD COLUMN correlation_id TEXT`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_tasks_correlation_id ON tasks(correlation_id)`);
+      }
+      console.log('[Migration 020] correlation_id added to tasks');
+    }
+  },
+  {
+    id: '021',
+    name: 'add_correlation_id_to_content_items',
+    up: (db) => {
+      console.log('[Migration 021] Adding correlation_id to content_items...');
+      const info = db.prepare("PRAGMA table_info(content_items)").all() as { name: string }[];
+      if (!info.some(col => col.name === 'correlation_id')) {
+        db.exec(`ALTER TABLE content_items ADD COLUMN correlation_id TEXT`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_content_items_correlation_id ON content_items(correlation_id)`);
+      }
+      console.log('[Migration 021] correlation_id added to content_items');
+    }
+  },
+  {
+    id: '022',
+    name: 'add_agent_frontmatter_columns',
+    up: (db) => {
+      console.log('[Migration 022] Adding mc_role and frontmatter_parse_error to agents...');
+      const info = db.prepare("PRAGMA table_info(agents)").all() as { name: string }[];
+      if (!info.some(col => col.name === 'mc_role')) {
+        db.exec(`ALTER TABLE agents ADD COLUMN mc_role TEXT`);
+      }
+      if (!info.some(col => col.name === 'frontmatter_parse_error')) {
+        db.exec(`ALTER TABLE agents ADD COLUMN frontmatter_parse_error INTEGER NOT NULL DEFAULT 0`);
+      }
+      console.log('[Migration 022] Agent frontmatter columns added');
+    }
+  },
+  {
+    id: '023',
+    name: 'add_monitor_columns_to_workspace_settings',
+    up: (db) => {
+      console.log('[Migration 023] Adding monitor columns to workspace_settings...');
+      const info = db.prepare("PRAGMA table_info(workspace_settings)").all() as { name: string }[];
+      if (!info.some(col => col.name === 'stale_task_threshold_minutes')) {
+        db.exec(`ALTER TABLE workspace_settings ADD COLUMN stale_task_threshold_minutes INTEGER NOT NULL DEFAULT 60`);
+      }
+      if (!info.some(col => col.name === 'monitor_cron_interval_minutes')) {
+        db.exec(`ALTER TABLE workspace_settings ADD COLUMN monitor_cron_interval_minutes INTEGER NOT NULL DEFAULT 15`);
+      }
+      console.log('[Migration 023] Monitor columns added to workspace_settings');
+    }
   }
 ];
 

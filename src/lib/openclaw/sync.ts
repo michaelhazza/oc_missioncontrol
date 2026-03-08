@@ -85,7 +85,12 @@ function processChatMessage(data: Record<string, unknown>): void {
   const correlationMatch = content.match(/TASK_COMPLETE\[([a-f0-9-]{36})\]:\s*(.+)/i);
   if (correlationMatch) {
     const [, correlationId, summary] = correlationMatch;
-    handleCompletionByCorrelationId(correlationId, summary.trim());
+    // For content item completions (e.g. Generate Script), the actual output
+    // is the message body BEFORE the TASK_COMPLETE marker, not the brief
+    // summary after it. Extract it so the script column gets the real content.
+    const markerIndex = content.search(/TASK_COMPLETE\[/i);
+    const bodyBeforeMarker = markerIndex > 0 ? content.slice(0, markerIndex).trim() : null;
+    handleCompletionByCorrelationId(correlationId, summary.trim(), bodyBeforeMarker);
     return;
   }
 
@@ -100,26 +105,53 @@ function processChatMessage(data: Record<string, unknown>): void {
 /**
  * Handle task completion matched by correlationId (primary path).
  */
-function handleCompletionByCorrelationId(correlationId: string, summary: string): void {
+function handleCompletionByCorrelationId(correlationId: string, summary: string, bodyBeforeMarker?: string | null): void {
   const now = new Date().toISOString();
 
+  // Try matching tasks by correlation_id first, fall back to gateway_task_id
   const task = queryOne<Task>(
+    'SELECT * FROM tasks WHERE correlation_id = ?',
+    [correlationId],
+  ) ?? queryOne<Task>(
     'SELECT * FROM tasks WHERE gateway_task_id = ?',
     [correlationId],
   );
 
-  if (!task) {
-    console.warn(`[Sync] No task found for correlationId: ${correlationId}`);
+  if (task) {
+    // Don't overwrite if already in a later state
+    if (['done', 'review', 'verification'].includes(task.status)) {
+      console.log(`[Sync] Task ${task.id} already in ${task.status}, skipping completion`);
+    } else {
+      completeTask(task, summary, now);
+    }
+  }
+
+  // Also check content_items — a Generate Script dispatch stores correlation_id
+  const contentItem = queryOne<{ id: string; generation_status: string }>(
+    'SELECT id, generation_status FROM content_items WHERE correlation_id = ?',
+    [correlationId],
+  );
+
+  if (contentItem) {
+    if (contentItem.generation_status === 'generating') {
+      // For content generation, the actual output (e.g. script text) is the message
+      // body before the TASK_COMPLETE marker. The summary after the marker is just
+      // a brief description like "Script generated successfully". Use the body when
+      // available so the content card renders the actual generated content.
+      const scriptContent = bodyBeforeMarker || summary;
+      run(
+        `UPDATE content_items SET generation_status = ?, script = ?, updated_at = ? WHERE id = ?`,
+        ['completed', scriptContent, now, contentItem.id],
+      );
+      broadcast({ type: 'content_updated', payload: { id: contentItem.id, generation_status: 'completed' } as unknown as import('@/lib/types').ContentItem });
+      console.log(`[Sync] Content item ${contentItem.id} generation completed`);
+    }
     return;
   }
 
-  // Don't overwrite if already in a later state
-  if (['done', 'review', 'verification'].includes(task.status)) {
-    console.log(`[Sync] Task ${task.id} already in ${task.status}, skipping completion`);
-    return;
+  if (!task && !contentItem) {
+    console.warn(`[Sync] No task or content item found for correlationId: ${correlationId}`);
   }
-
-  completeTask(task, summary, now);
 }
 
 /**

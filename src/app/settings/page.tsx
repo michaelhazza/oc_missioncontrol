@@ -26,15 +26,20 @@ export default function SettingsPage() {
     polling_interval_seconds: number;
     state_mapping: string;
     max_retry_count: number;
+    stale_task_threshold_minutes: number;
+    monitor_cron_interval_minutes: number;
   }>({
     gateway_url: '',
     webhook_secret: '',
     polling_interval_seconds: 60,
     state_mapping: '{"queued":"inbox","assigned":"in_progress","running":"in_progress","completed":"done","failed":"blocked"}',
     max_retry_count: 5,
+    stale_task_threshold_minutes: 60,
+    monitor_cron_interval_minutes: 15,
   });
   const [retryingSyncCount, setRetryingSyncCount] = useState<number | null>(null);
   const [retrySyncResult, setRetrySyncResult] = useState<string | null>(null);
+  const [discoveryWarnings, setDiscoveryWarnings] = useState<string[]>([]);
 
   const checkGatewayStatus = useCallback(async () => {
     setGatewayChecking(true);
@@ -62,6 +67,8 @@ export default function SettingsPage() {
             ? JSON.stringify(data.state_mapping, null, 2)
             : data.state_mapping || '{}',
           max_retry_count: data.max_retry_count || 5,
+          stale_task_threshold_minutes: data.stale_task_threshold_minutes || 60,
+          monitor_cron_interval_minutes: data.monitor_cron_interval_minutes || 15,
         });
       }
     } catch (e) {
@@ -69,11 +76,24 @@ export default function SettingsPage() {
     }
   }, []);
 
+  const loadTopologyWarnings = useCallback(async () => {
+    try {
+      const res = await fetch('/api/agents/sync-frontmatter');
+      if (res.ok) {
+        const data = await res.json();
+        setDiscoveryWarnings(data.warnings || []);
+      }
+    } catch {
+      // Non-critical — warnings just won't show on load
+    }
+  }, []);
+
   useEffect(() => {
     setConfig(getConfig());
     checkGatewayStatus();
     loadIntegrationSettings();
-  }, [checkGatewayStatus, loadIntegrationSettings]);
+    loadTopologyWarnings();
+  }, [checkGatewayStatus, loadIntegrationSettings, loadTopologyWarnings]);
 
   const handleSave = async () => {
     if (!config) return;
@@ -130,6 +150,8 @@ export default function SettingsPage() {
           polling_interval_seconds: integrationSettings.polling_interval_seconds,
           state_mapping: parsedMapping,
           max_retry_count: integrationSettings.max_retry_count,
+          stale_task_threshold_minutes: integrationSettings.stale_task_threshold_minutes,
+          monitor_cron_interval_minutes: integrationSettings.monitor_cron_interval_minutes,
         }),
       });
 
@@ -397,6 +419,37 @@ export default function SettingsPage() {
               </div>
             </div>
 
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-mc-text mb-2">Stale Task Threshold (minutes)</label>
+                <input
+                  type="number"
+                  min={5}
+                  max={1440}
+                  value={integrationSettings.stale_task_threshold_minutes}
+                  onChange={(e) => setIntegrationSettings(s => ({ ...s, stale_task_threshold_minutes: parseInt(e.target.value) || 60 }))}
+                  className="w-full px-4 py-2 bg-mc-bg border border-mc-border rounded text-mc-text focus:border-mc-accent focus:outline-none"
+                />
+                <p className="text-xs text-mc-text-secondary mt-1">
+                  Tasks in_progress longer than this are flagged as stale.
+                </p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-mc-text mb-2">Monitor Interval (minutes)</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={120}
+                  value={integrationSettings.monitor_cron_interval_minutes}
+                  onChange={(e) => setIntegrationSettings(s => ({ ...s, monitor_cron_interval_minutes: parseInt(e.target.value) || 15 }))}
+                  className="w-full px-4 py-2 bg-mc-bg border border-mc-border rounded text-mc-text focus:border-mc-accent focus:outline-none"
+                />
+                <p className="text-xs text-mc-text-secondary mt-1">
+                  How often to check for stale tasks. Requires server restart.
+                </p>
+              </div>
+            </div>
+
             <div>
               <label className="block text-sm font-medium text-mc-text mb-2">
                 State Mapping (OpenClaw → Mission Control)
@@ -429,10 +482,38 @@ export default function SettingsPage() {
                 <RefreshCw className={`w-4 h-4 ${retryingSyncCount !== null ? 'animate-spin' : ''}`} />
                 Retry Failed Syncs
               </button>
+              <button
+                onClick={async () => {
+                  try {
+                    const res = await fetch('/api/agents/sync-frontmatter', { method: 'POST' });
+                    const data = await res.json();
+                    setDiscoveryWarnings(data.warnings || []);
+                    setRetrySyncResult(`Frontmatter synced for ${data.synced} agents`);
+                    setTimeout(() => setRetrySyncResult(null), 5000);
+                  } catch {
+                    setRetrySyncResult('Frontmatter sync failed');
+                  }
+                }}
+                className="px-4 py-2 border border-mc-border rounded hover:bg-mc-bg-tertiary text-mc-text-secondary flex items-center gap-2 text-sm"
+              >
+                <RefreshCw className="w-4 h-4" />
+                Sync Frontmatter
+              </button>
               {retrySyncResult && (
                 <span className="text-xs text-mc-text-secondary">{retrySyncResult}</span>
               )}
             </div>
+
+            {discoveryWarnings.length > 0 && (
+              <div className="mt-3 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded">
+                <p className="text-sm font-medium text-yellow-400 mb-1">Agent Topology Warnings</p>
+                <ul className="text-xs text-yellow-300 space-y-1 ml-4 list-disc">
+                  {discoveryWarnings.map((w, i) => (
+                    <li key={i}>{w}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
         </section>
 

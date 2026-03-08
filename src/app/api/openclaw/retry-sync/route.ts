@@ -7,7 +7,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { queryAll } from '@/lib/db';
+import { queryAll, run } from '@/lib/db';
 import { retryDispatch } from '@/lib/openclaw/dispatch';
 import { getWorkspaceSettings } from '@/lib/openclaw/workspace-settings';
 import type { Task } from '@/lib/types';
@@ -19,8 +19,9 @@ export async function POST(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const workspaceId = searchParams.get('workspace_id');
 
-    // Find all pending_sync tasks, optionally scoped to a workspace
-    let sql = `SELECT * FROM tasks WHERE sync_status = 'pending_sync'`;
+    // Find all pending_sync AND sync_failed tasks, optionally scoped to a workspace.
+    // Manual re-sync picks up both states — the automatic retry queue only sweeps pending_sync.
+    let sql = `SELECT * FROM tasks WHERE sync_status IN ('pending_sync', 'sync_failed')`;
     const params: unknown[] = [];
 
     if (workspaceId) {
@@ -38,6 +39,14 @@ export async function POST(request: NextRequest) {
     const results = { retried: 0, succeeded: 0, failed: 0, errors: [] as string[] };
 
     for (const task of pendingTasks) {
+      // Reset retry_count and sync_status before dispatching.
+      // Without this reset, retryDispatch's >= maxRetries check will immediately
+      // flip sync_failed tasks back to sync_failed regardless of outcome.
+      run(
+        `UPDATE tasks SET retry_count = 0, sync_status = 'pending_sync', updated_at = datetime('now') WHERE id = ?`,
+        [task.id],
+      );
+
       const settings = getWorkspaceSettings(task.workspace_id);
       const maxRetries = settings.max_retry_count;
 

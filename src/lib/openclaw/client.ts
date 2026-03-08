@@ -54,6 +54,9 @@ export class OpenClawClient extends EventEmitter {
   private token: string;
   private deviceIdentity: { deviceId: string; publicKeyPem: string; privateKeyPem: string } | null = null;
   private messageHandlers = new Set<(event: MessageEvent) => void>(); // Track all message handlers for cleanup
+  private reconnectAttempt = 0; // Tracks exponential backoff attempts
+  private readonly RECONNECT_BASE_MS = 2000; // Start at 2s
+  private readonly RECONNECT_CAP_MS = 60000; // Cap at 60s
   private readonly MAX_PROCESSED_EVENTS = 1000; // Limit the size of the processed events cache
   private readonly CLEANUP_THRESHOLD = 100; // Number of entries to remove when limit exceeded
   private readonly CACHE_ENTRY_TTL_MS = 60 * 60 * 1000; // 1 hour TTL for cache entries
@@ -418,6 +421,15 @@ export class OpenClawClient extends EventEmitter {
   private scheduleReconnect(): void {
     if (this.reconnectTimer || !this.autoReconnect) return;
 
+    // Exponential backoff: 2s, 4s, 8s, 16s, 32s, 60s (cap)
+    const delay = Math.min(
+      this.RECONNECT_BASE_MS * Math.pow(2, this.reconnectAttempt),
+      this.RECONNECT_CAP_MS,
+    );
+    this.reconnectAttempt++;
+
+    console.log(`[OpenClaw] Scheduling reconnect in ${delay}ms (attempt ${this.reconnectAttempt})`);
+
     this.reconnectTimer = setTimeout(async () => {
       this.reconnectTimer = null;
       if (!this.autoReconnect) return;
@@ -425,11 +437,12 @@ export class OpenClawClient extends EventEmitter {
       console.log('[OpenClaw] Attempting reconnect...');
       try {
         await this.connect();
+        // Reset backoff on successful reconnect
+        this.reconnectAttempt = 0;
       } catch {
-        // Don't spam logs on reconnect failure, just schedule another attempt
         this.scheduleReconnect();
       }
-    }, 10000); // 10 seconds between reconnect attempts
+    }, delay);
   }
 
   async call<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T> {
@@ -510,6 +523,26 @@ export class OpenClawClient extends EventEmitter {
       return result as GatewayConfigSnapshot;
     }
     return {};
+  }
+
+  /**
+   * Send a fire-and-forget message to the gateway.
+   * Unlike call(), this does not wait for a response.
+   */
+  send(message: Record<string, unknown>): void {
+    if (!this.ws || !this.connected || !this.authenticated) {
+      throw new Error('Not connected to OpenClaw Gateway');
+    }
+    this.ws.send(JSON.stringify(message));
+  }
+
+  /**
+   * Get the current connection state for UI display.
+   */
+  getConnectionState(): 'connected' | 'reconnecting' | 'unreachable' {
+    if (this.connected && this.authenticated) return 'connected';
+    if (this.reconnectTimer || this.connecting) return 'reconnecting';
+    return 'unreachable';
   }
 
   disconnect(): void {

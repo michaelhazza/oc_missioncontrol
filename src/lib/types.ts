@@ -41,6 +41,8 @@ export interface Agent {
   gateway_agent_id?: string;
   session_key_prefix?: string;
   capabilities?: string[];
+  mc_role?: 'orchestrator' | 'specialist' | 'monitor' | null;
+  frontmatter_parse_error?: number;
   created_at: string;
   updated_at: string;
 }
@@ -75,6 +77,7 @@ export interface Task {
   planning_dispatch_error?: string;
   planning_session_key?: string;
   // Gateway integration fields
+  correlation_id?: string;
   gateway_task_id?: string;
   sync_status?: SyncStatus;
   retry_count?: number;
@@ -149,6 +152,8 @@ export interface WorkspaceSettings {
   polling_interval_seconds: number;
   state_mapping: Record<string, string>;
   max_retry_count: number;
+  stale_task_threshold_minutes: number;
+  monitor_cron_interval_minutes: number;
   created_at: string;
   updated_at: string;
 }
@@ -165,6 +170,7 @@ export interface ContentItem {
   thumbnail_url?: string;
   notes?: string;
   workspace_id: string;
+  correlation_id?: string;
   gateway_task_id?: string;
   generation_status?: ContentGenerationStatus;
   created_at: string;
