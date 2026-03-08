@@ -1,53 +1,42 @@
-# dependencies
-/node_modules
-/.pnp
-.pnp.js
-.yarn/install-state.gz
+# Dependencies
+node_modules/
+.npm
 
-# testing
-/coverage
-
-# next.js
-/.next/
-/out/
-
-# production
-/build
-
-# misc
-.DS_Store
+# Environment & credentials
+.env
+.env.local
+.env.*.local
 *.pem
 
-# debug
+# Database files
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Next.js build output
+.next/
+out/
+build/
+
+# Runtime & logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+.pnpm-debug.log*
 
-# local env files
-.env*.local
-.env
+# OS files
+.DS_Store
+Thumbs.db
 
-# vercel
-.vercel
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
 
-# typescript
-*.tsbuildinfo
-next-env.d.ts
-
-# database (SQLite)
-*.db
-*.db-journal
-*.db-shm
-*.db-wal
-
-# claude code local files
-.claude/settings.local.json
-.claude/tsc-cache/
-
-# local development notes/handoffs (may contain sensitive context)
-/thoughts/
-
-# Backups
+# Misc
 *.backup
-*.bak
-*.db.backup
+mission-control.db.backup

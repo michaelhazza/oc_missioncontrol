@@ -621,6 +621,31 @@ const migrations: Migration[] = [
 
       console.log('[Migration 013] Fresh start complete');
     }
+  },
+  {
+    id: '014',
+    name: 'add_content_items',
+    up: (db) => {
+      console.log('[Migration 014] Adding content_items table...');
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS content_items (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          description TEXT,
+          platform TEXT DEFAULT 'youtube',
+          stage TEXT DEFAULT 'idea' CHECK (stage IN ('idea', 'script', 'thumbnail', 'filming', 'published')),
+          script TEXT,
+          thumbnail_url TEXT,
+          notes TEXT,
+          workspace_id TEXT DEFAULT 'default',
+          created_at TEXT DEFAULT (datetime('now')),
+          updated_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_content_items_workspace ON content_items(workspace_id);
+        CREATE INDEX IF NOT EXISTS idx_content_items_stage ON content_items(stage);
+      `);
+      console.log('[Migration 014] content_items table created');
+    }
   }
 ];
 
