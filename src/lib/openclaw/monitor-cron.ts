@@ -117,6 +117,14 @@ async function runStaleTaskCheck(): Promise<void> {
     if (updated) broadcast({ type: 'task_updated', payload: updated });
   }
 
+  // Notify the orchestrator about auto-fails in a single batched message so they have
+  // context before touching these tasks again. One message regardless of task count.
+  if (autoFailTasks.length > 0) {
+    await notifyOrchestratorOfAutoFails(autoFailTasks, thresholdMinutes).catch(err =>
+      console.error('[MonitorCron] Failed to notify orchestrator of auto-fails:', err),
+    );
+  }
+
   // Only nudge the first-cycle stale tasks (1x–2x threshold) via the monitor agent
   if (nudgeTasks.length === 0) return;
 
@@ -141,6 +149,34 @@ async function runStaleTaskCheck(): Promise<void> {
   } catch (err) {
     console.error('[MonitorCron] Failed to dispatch to monitor agent:', err);
   }
+}
+
+async function notifyOrchestratorOfAutoFails(tasks: StaleTaskRow[], thresholdMinutes: number): Promise<void> {
+  // Find the master/orchestrator agent
+  const orchestrator = queryOne<Agent>(
+    `SELECT * FROM agents WHERE is_master = 1 AND status != 'offline' LIMIT 1`,
+  );
+  if (!orchestrator) return; // No orchestrator configured
+
+  const client = getOpenClawClient();
+  if (!client.isConnected()) return;
+
+  const taskLines = tasks
+    .map(t => `- "${t.title}" (ID: ${t.id}) — assigned to ${t.agent_name || 'unknown'}, overdue ${Math.round(t.minutes_overdue)} min`)
+    .join('\n');
+
+  const message = `FYI — Mission Control auto-failed ${tasks.length} task${tasks.length > 1 ? 's' : ''} that had no response after ${thresholdMinutes * 2} minutes. ${tasks.length > 1 ? 'They have' : 'It has'} been moved to review status.
+
+${taskLines}
+
+The assigned agents have been freed. You can review these tasks in Mission Control and re-assign if needed. No reply needed — this is informational only.`;
+
+  const prefix = orchestrator.session_key_prefix || 'agent:main:';
+  const openclawSessionId = `mission-control-${orchestrator.name.toLowerCase().replace(/\s+/g, '-')}`;
+  const sessionKey = `${prefix}${openclawSessionId}`;
+
+  await client.call('chat.send', { sessionKey, message });
+  console.log(`[MonitorCron] Notified orchestrator of ${tasks.length} auto-failed task(s)`);
 }
 
 function formatStaleTaskMessage(tasks: StaleTaskRow[]): string {
