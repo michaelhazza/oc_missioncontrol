@@ -40,7 +40,23 @@ interface ContentItem {
 export default function ContentPage() {
   const params = useParams();
   const slug = params?.slug as string;
-  const workspaceId = 'default'; // TODO: resolve from slug
+  const [workspaceId, setWorkspaceId] = useState<string>('default');
+
+  // Resolve workspace_id from URL slug
+  useEffect(() => {
+    async function resolveWorkspace() {
+      try {
+        const res = await fetch(`/api/workspaces/${slug}`);
+        if (res.ok) {
+          const workspace = await res.json();
+          setWorkspaceId(workspace.id);
+        }
+      } catch (e) {
+        console.error('Failed to resolve workspace from slug:', e);
+      }
+    }
+    if (slug) resolveWorkspace();
+  }, [slug]);
 
   const [items, setItems] = useState<ContentItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -128,18 +144,47 @@ export default function ContentPage() {
           description: editItem.description,
           platform: editItem.platform,
           notes: editItem.notes,
+          content_id: editItem.id,
+          workspace_id: workspaceId,
         }),
       });
       if (res.ok) {
-        const { script } = await res.json();
-        await handleUpdate(editItem.id, { script, stage: 'script' });
+        const data = await res.json();
+        // Task dispatched to agent — UI shows generating state via SSE
+        if (data.status === 'generating') {
+          setEditItem(prev => prev ? { ...prev, generation_status: 'generating' } : null);
+          setItems(prev => prev.map(i => i.id === editItem.id ? { ...i, generation_status: 'generating' } : i));
+        }
+      } else {
+        setGeneratingScript(false);
       }
     } catch (e) {
       console.error(e);
-    } finally {
       setGeneratingScript(false);
     }
   };
+
+  // Listen for SSE content updates (script generation completion)
+  useEffect(() => {
+    const eventSource = new EventSource('/api/events/stream');
+    eventSource.onmessage = (event) => {
+      try {
+        if (event.data.startsWith(':')) return;
+        const sseEvent = JSON.parse(event.data);
+        if (sseEvent.type === 'content_updated' && sseEvent.payload?.id) {
+          const updated = sseEvent.payload;
+          setItems(prev => prev.map(i => i.id === updated.id ? { ...updated, ...i, ...updated } : i));
+          if (editItem?.id === updated.id) {
+            setEditItem(prev => prev ? { ...prev, ...updated } : null);
+            if (updated.generation_status === 'completed' || updated.script) {
+              setGeneratingScript(false);
+            }
+          }
+        }
+      } catch { /* ignore parse errors */ }
+    };
+    return () => eventSource.close();
+  }, [editItem?.id]);
 
   const PlatformIcon = ({ platform }: { platform: string }) => {
     const p = PLATFORMS.find(p => p.id === platform);
@@ -378,14 +423,26 @@ export default function ContentPage() {
             {/* Script Section */}
             <div className="border-t border-mc-border pt-4">
               <div className="flex items-center justify-between mb-2">
-                <label className="text-sm font-medium">Script</label>
+                <div className="flex items-center gap-2">
+                  <label className="text-sm font-medium">Script</label>
+                  {(editItem as ContentItem & { generation_status?: string }).generation_status === 'generating' && (
+                    <span className="text-xs text-mc-accent-yellow bg-mc-accent-yellow/10 px-2 py-0.5 rounded animate-pulse">
+                      Agent generating...
+                    </span>
+                  )}
+                  {(editItem as ContentItem & { generation_status?: string }).generation_status === 'failed' && (
+                    <span className="text-xs text-mc-accent-red bg-mc-accent-red/10 px-2 py-0.5 rounded">
+                      Generation failed
+                    </span>
+                  )}
+                </div>
                 <button
                   onClick={handleGenerateScript}
-                  disabled={generatingScript}
+                  disabled={generatingScript || (editItem as ContentItem & { generation_status?: string }).generation_status === 'generating'}
                   className="flex items-center gap-2 px-3 py-1.5 bg-mc-accent-purple/20 border border-mc-accent-purple/30 text-mc-accent-purple rounded text-xs font-medium hover:bg-mc-accent-purple/30 disabled:opacity-50"
                 >
-                  {generatingScript ? (
-                    <><Loader2 className="w-3 h-3 animate-spin" /> Generating...</>
+                  {generatingScript || (editItem as ContentItem & { generation_status?: string }).generation_status === 'generating' ? (
+                    <><Loader2 className="w-3 h-3 animate-spin" /> Generating via Agent...</>
                   ) : (
                     <><Wand2 className="w-3 h-3" /> Generate Script</>
                   )}

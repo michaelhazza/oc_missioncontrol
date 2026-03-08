@@ -26,6 +26,11 @@ export function getDb(): Database.Database {
     if (isNewDb) {
       console.log('[DB] New database created at:', DB_PATH);
     }
+
+    // Startup warnings for missing security configuration
+    if (!process.env.OPENCLAW_WEBHOOK_SECRET) {
+      console.warn('[SECURITY] OPENCLAW_WEBHOOK_SECRET is not set — webhook signature verification is DISABLED. Set this before deploying to production.');
+    }
   }
   return db;
 }

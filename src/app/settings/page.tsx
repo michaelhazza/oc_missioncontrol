@@ -5,9 +5,9 @@
 
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { Settings, Save, RotateCcw, Home, FolderOpen, Link as LinkIcon } from 'lucide-react';
+import { Settings, Save, RotateCcw, Home, FolderOpen, Link as LinkIcon, Wifi, WifiOff, RefreshCw, Loader2 } from 'lucide-react';
 import { getConfig, updateConfig, resetConfig, type MissionControlConfig } from '@/lib/config';
 
 export default function SettingsPage() {
@@ -17,9 +17,63 @@ export default function SettingsPage() {
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Integration state
+  const [gatewayConnected, setGatewayConnected] = useState<boolean | null>(null);
+  const [gatewayChecking, setGatewayChecking] = useState(false);
+  const [integrationSettings, setIntegrationSettings] = useState<{
+    gateway_url: string;
+    webhook_secret: string;
+    polling_interval_seconds: number;
+    state_mapping: string;
+    max_retry_count: number;
+  }>({
+    gateway_url: '',
+    webhook_secret: '',
+    polling_interval_seconds: 60,
+    state_mapping: '{"queued":"inbox","assigned":"in_progress","running":"in_progress","completed":"done","failed":"blocked"}',
+    max_retry_count: 5,
+  });
+  const [retryingSyncCount, setRetryingSyncCount] = useState<number | null>(null);
+  const [retrySyncResult, setRetrySyncResult] = useState<string | null>(null);
+
+  const checkGatewayStatus = useCallback(async () => {
+    setGatewayChecking(true);
+    try {
+      const res = await fetch('/api/openclaw/status');
+      const data = await res.json();
+      setGatewayConnected(data.connected === true);
+    } catch {
+      setGatewayConnected(false);
+    } finally {
+      setGatewayChecking(false);
+    }
+  }, []);
+
+  const loadIntegrationSettings = useCallback(async () => {
+    try {
+      const res = await fetch('/api/workspace-settings?workspace_id=default');
+      if (res.ok) {
+        const data = await res.json();
+        setIntegrationSettings({
+          gateway_url: data.gateway_url || '',
+          webhook_secret: data.webhook_secret || '',
+          polling_interval_seconds: data.polling_interval_seconds || 60,
+          state_mapping: typeof data.state_mapping === 'object'
+            ? JSON.stringify(data.state_mapping, null, 2)
+            : data.state_mapping || '{}',
+          max_retry_count: data.max_retry_count || 5,
+        });
+      }
+    } catch (e) {
+      console.error('Failed to load integration settings:', e);
+    }
+  }, []);
+
   useEffect(() => {
     setConfig(getConfig());
-  }, []);
+    checkGatewayStatus();
+    loadIntegrationSettings();
+  }, [checkGatewayStatus, loadIntegrationSettings]);
 
   const handleSave = async () => {
     if (!config) return;
@@ -51,6 +105,60 @@ export default function SettingsPage() {
   const handleChange = (field: keyof MissionControlConfig, value: string) => {
     if (!config) return;
     setConfig({ ...config, [field]: value });
+  };
+
+  const handleSaveIntegration = async () => {
+    setIsSaving(true);
+    setError(null);
+    try {
+      let parsedMapping: Record<string, string>;
+      try {
+        parsedMapping = JSON.parse(integrationSettings.state_mapping);
+      } catch {
+        setError('Invalid JSON in state mapping');
+        setIsSaving(false);
+        return;
+      }
+
+      const res = await fetch('/api/workspace-settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workspace_id: 'default',
+          gateway_url: integrationSettings.gateway_url || undefined,
+          webhook_secret: integrationSettings.webhook_secret || undefined,
+          polling_interval_seconds: integrationSettings.polling_interval_seconds,
+          state_mapping: parsedMapping,
+          max_retry_count: integrationSettings.max_retry_count,
+        }),
+      });
+
+      if (res.ok) {
+        setSaveSuccess(true);
+        setTimeout(() => setSaveSuccess(false), 3000);
+      } else {
+        setError('Failed to save integration settings');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleRetrySync = async () => {
+    setRetryingSyncCount(0);
+    setRetrySyncResult(null);
+    try {
+      const res = await fetch('/api/openclaw/retry-sync?workspace_id=default', { method: 'POST' });
+      const data = await res.json();
+      setRetryingSyncCount(null);
+      setRetrySyncResult(data.message || `${data.succeeded}/${data.retried} succeeded`);
+      setTimeout(() => setRetrySyncResult(null), 5000);
+    } catch {
+      setRetryingSyncCount(null);
+      setRetrySyncResult('Retry sync failed');
+    }
   };
 
   if (!config) {
@@ -204,6 +312,130 @@ export default function SettingsPage() {
           </div>
         </section>
 
+        {/* OpenClaw Integration */}
+        <section className="mb-8 p-6 bg-mc-bg-secondary border border-mc-border rounded-lg">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              {gatewayConnected === true ? (
+                <Wifi className="w-5 h-5 text-green-400" />
+              ) : gatewayConnected === false ? (
+                <WifiOff className="w-5 h-5 text-red-400" />
+              ) : (
+                <Loader2 className="w-5 h-5 text-mc-text-secondary animate-spin" />
+              )}
+              <h2 className="text-xl font-semibold text-mc-text">OpenClaw Integration</h2>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className={`text-xs px-2 py-1 rounded ${
+                gatewayConnected === true ? 'bg-green-500/10 text-green-400' :
+                gatewayConnected === false ? 'bg-red-500/10 text-red-400' :
+                'bg-mc-bg-tertiary text-mc-text-secondary'
+              }`}>
+                {gatewayChecking ? 'Checking...' :
+                 gatewayConnected === true ? 'Connected' :
+                 gatewayConnected === false ? 'Disconnected' : 'Unknown'}
+              </span>
+              <button
+                onClick={checkGatewayStatus}
+                disabled={gatewayChecking}
+                className="p-1.5 hover:bg-mc-bg-tertiary rounded text-mc-text-secondary"
+                title="Check connection"
+              >
+                <RefreshCw className={`w-4 h-4 ${gatewayChecking ? 'animate-spin' : ''}`} />
+              </button>
+            </div>
+          </div>
+          <p className="text-sm text-mc-text-secondary mb-4">
+            Configure the OpenClaw gateway connection and task sync settings. These settings are workspace-scoped.
+          </p>
+
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-mc-text mb-2">Gateway URL</label>
+              <input
+                type="text"
+                value={integrationSettings.gateway_url}
+                onChange={(e) => setIntegrationSettings(s => ({ ...s, gateway_url: e.target.value }))}
+                placeholder="ws://127.0.0.1:18789 (uses env default if empty)"
+                className="w-full px-4 py-2 bg-mc-bg border border-mc-border rounded text-mc-text focus:border-mc-accent focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-mc-text mb-2">Webhook Secret (masked)</label>
+              <input
+                type="password"
+                value={integrationSettings.webhook_secret}
+                onChange={(e) => setIntegrationSettings(s => ({ ...s, webhook_secret: e.target.value }))}
+                placeholder="Shared secret for webhook signature verification"
+                className="w-full px-4 py-2 bg-mc-bg border border-mc-border rounded text-mc-text focus:border-mc-accent focus:outline-none"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-mc-text mb-2">Polling Interval (seconds)</label>
+                <input
+                  type="number"
+                  min={10}
+                  max={600}
+                  value={integrationSettings.polling_interval_seconds}
+                  onChange={(e) => setIntegrationSettings(s => ({ ...s, polling_interval_seconds: parseInt(e.target.value) || 60 }))}
+                  className="w-full px-4 py-2 bg-mc-bg border border-mc-border rounded text-mc-text focus:border-mc-accent focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-mc-text mb-2">Max Retry Count</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={20}
+                  value={integrationSettings.max_retry_count}
+                  onChange={(e) => setIntegrationSettings(s => ({ ...s, max_retry_count: parseInt(e.target.value) || 5 }))}
+                  className="w-full px-4 py-2 bg-mc-bg border border-mc-border rounded text-mc-text focus:border-mc-accent focus:outline-none"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-mc-text mb-2">
+                State Mapping (OpenClaw → Mission Control)
+              </label>
+              <textarea
+                value={integrationSettings.state_mapping}
+                onChange={(e) => setIntegrationSettings(s => ({ ...s, state_mapping: e.target.value }))}
+                rows={6}
+                className="w-full px-4 py-2 bg-mc-bg border border-mc-border rounded text-mc-text text-xs font-mono focus:border-mc-accent focus:outline-none resize-none"
+              />
+              <p className="text-xs text-mc-text-secondary mt-1">
+                Maps OpenClaw task states to Mission Control statuses. Edit as JSON.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-3 pt-2">
+              <button
+                onClick={handleSaveIntegration}
+                disabled={isSaving}
+                className="px-4 py-2 bg-mc-accent text-mc-bg rounded hover:bg-mc-accent/90 flex items-center gap-2 disabled:opacity-50 text-sm"
+              >
+                <Save className="w-4 h-4" />
+                Save Integration Settings
+              </button>
+              <button
+                onClick={handleRetrySync}
+                disabled={retryingSyncCount !== null}
+                className="px-4 py-2 border border-mc-border rounded hover:bg-mc-bg-tertiary text-mc-text-secondary flex items-center gap-2 text-sm"
+              >
+                <RefreshCw className={`w-4 h-4 ${retryingSyncCount !== null ? 'animate-spin' : ''}`} />
+                Retry Failed Syncs
+              </button>
+              {retrySyncResult && (
+                <span className="text-xs text-mc-text-secondary">{retrySyncResult}</span>
+              )}
+            </div>
+          </div>
+        </section>
+
         {/* Environment Variables Note */}
         <section className="p-6 bg-blue-500/10 border border-blue-500/30 rounded-lg">
           <h3 className="text-lg font-semibold text-blue-400 mb-2">
@@ -218,6 +450,7 @@ export default function SettingsPage() {
             <li><code>PROJECTS_PATH</code> - Projects directory</li>
             <li><code>OPENCLAW_GATEWAY_URL</code> - Gateway WebSocket URL</li>
             <li><code>OPENCLAW_GATEWAY_TOKEN</code> - Gateway auth token</li>
+            <li><code>OPENCLAW_WEBHOOK_SECRET</code> - Webhook signature secret</li>
           </ul>
           <p className="text-xs text-blue-400 mt-3">
             Environment variables take precedence over UI settings for server-side operations.

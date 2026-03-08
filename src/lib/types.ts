@@ -2,7 +2,7 @@
 
 export type AgentStatus = 'standby' | 'working' | 'offline';
 
-export type TaskStatus = 'pending_dispatch' | 'planning' | 'inbox' | 'assigned' | 'in_progress' | 'testing' | 'review' | 'verification' | 'done';
+export type TaskStatus = 'pending_dispatch' | 'planning' | 'inbox' | 'assigned' | 'in_progress' | 'testing' | 'review' | 'verification' | 'blocked' | 'done';
 
 export type TaskPriority = 'low' | 'normal' | 'high' | 'urgent';
 
@@ -22,6 +22,8 @@ export type EventType =
 
 export type AgentSource = 'local' | 'gateway';
 
+export type SyncStatus = 'local' | 'synced' | 'pending_sync' | 'sync_failed';
+
 export interface Agent {
   id: string;
   name: string;
@@ -38,6 +40,7 @@ export interface Agent {
   source: AgentSource;
   gateway_agent_id?: string;
   session_key_prefix?: string;
+  capabilities?: string[];
   created_at: string;
   updated_at: string;
 }
@@ -71,6 +74,12 @@ export interface Task {
   planning_complete?: number;
   planning_dispatch_error?: string;
   planning_session_key?: string;
+  // Gateway integration fields
+  gateway_task_id?: string;
+  sync_status?: SyncStatus;
+  retry_count?: number;
+  last_sync_attempt?: string;
+  gateway_completion_notes?: string;
   created_at: string;
   updated_at: string;
   // Joined fields
@@ -132,6 +141,36 @@ export interface Workspace {
   updated_at: string;
 }
 
+export interface WorkspaceSettings {
+  id: string;
+  workspace_id: string;
+  gateway_url?: string;
+  webhook_secret?: string;
+  polling_interval_seconds: number;
+  state_mapping: Record<string, string>;
+  max_retry_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export type ContentGenerationStatus = 'idle' | 'generating' | 'completed' | 'failed';
+
+export interface ContentItem {
+  id: string;
+  title: string;
+  description?: string;
+  platform: string;
+  stage: string;
+  script?: string;
+  thumbnail_url?: string;
+  notes?: string;
+  workspace_id: string;
+  gateway_task_id?: string;
+  generation_status?: ContentGenerationStatus;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface WorkspaceStats {
   id: string;
   name: string;
@@ -146,6 +185,7 @@ export interface WorkspaceStats {
     testing: number;
     review: number;
     verification: number;
+    blocked: number;
     done: number;
     total: number;
   };
@@ -361,7 +401,9 @@ export type SSEEventType =
   | 'activity_logged'
   | 'deliverable_added'
   | 'agent_spawned'
-  | 'agent_completed';
+  | 'agent_completed'
+  | 'content_updated'
+  | 'integration_error';
 
 export interface SSEEvent {
   type: SSEEventType;
