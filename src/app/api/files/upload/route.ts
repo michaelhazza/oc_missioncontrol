@@ -6,7 +6,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { writeFileSync, mkdirSync, existsSync } from 'fs';
+import { writeFileSync, mkdirSync, existsSync, realpathSync, lstatSync } from 'fs';
 import path from 'path';
 
 export const dynamic = 'force-dynamic';
@@ -61,6 +61,42 @@ export async function POST(request: NextRequest) {
     const parentDir = path.dirname(fullPath);
     if (!existsSync(parentDir)) {
       mkdirSync(parentDir, { recursive: true });
+    }
+
+    // Security: Verify resolved path is within PROJECTS_BASE (prevents symlink attacks)
+    // Check parent dir since the file may not exist yet
+    try {
+      const resolvedParent = realpathSync(parentDir);
+      const resolvedBase = realpathSync(PROJECTS_BASE);
+      if (!resolvedParent.startsWith(resolvedBase + path.sep) && resolvedParent !== resolvedBase) {
+        console.warn(`[SECURITY] Upload path traversal attempt blocked: ${fullPath} -> ${resolvedParent}`);
+        return NextResponse.json(
+          { error: 'Access denied' },
+          { status: 403 }
+        );
+      }
+
+      // Prevent overwriting symlinks that point outside the base
+      const targetFile = path.join(resolvedParent, path.basename(normalizedPath));
+      if (existsSync(targetFile)) {
+        const stat = lstatSync(targetFile);
+        if (stat.isSymbolicLink()) {
+          const resolvedTarget = realpathSync(targetFile);
+          if (!resolvedTarget.startsWith(resolvedBase + path.sep)) {
+            console.warn(`[SECURITY] Upload to symlink outside base blocked: ${targetFile} -> ${resolvedTarget}`);
+            return NextResponse.json(
+              { error: 'Access denied' },
+              { status: 403 }
+            );
+          }
+        }
+      }
+    } catch (error) {
+      console.error('[FILE UPLOAD] Error resolving path:', error);
+      return NextResponse.json(
+        { error: 'Access denied' },
+        { status: 403 }
+      );
     }
 
     // Write the file

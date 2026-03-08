@@ -1,5 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+/**
+ * Timing-safe string comparison to prevent timing attacks on token validation.
+ * Edge runtime doesn't have Node's crypto.timingSafeEqual, so we implement
+ * a constant-time comparison manually.
+ */
+function timingSafeCompare(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let result = 0;
+  for (let i = 0; i < a.length; i++) {
+    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return result === 0;
+}
+
 // Log warning at startup if auth is disabled
 const MC_API_TOKEN = process.env.MC_API_TOKEN;
 if (!MC_API_TOKEN) {
@@ -90,17 +104,25 @@ export function middleware(request: NextRequest) {
   }
 
   // Special case: /api/events/stream (SSE) - allow token as query param
+  // NOTE: Token in URL query params can leak via server logs, proxy logs, and
+  // browser history. This is an accepted trade-off for SSE (EventSource API
+  // doesn't support custom headers). Prefer Bearer token in Authorization
+  // header for all other endpoints.
   if (pathname === '/api/events/stream') {
     const queryToken = request.nextUrl.searchParams.get('token');
-    if (queryToken && queryToken === MC_API_TOKEN) {
-      return NextResponse.next();
+    if (queryToken && MC_API_TOKEN && timingSafeCompare(queryToken, MC_API_TOKEN)) {
+      // Strip the token from the URL before forwarding to prevent it from
+      // appearing in downstream logs
+      const cleanUrl = request.nextUrl.clone();
+      cleanUrl.searchParams.delete('token');
+      return NextResponse.rewrite(cleanUrl);
     }
     // Fall through to header check below
   }
 
   // Check Authorization header for bearer token
   const authHeader = request.headers.get('authorization');
-  
+
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return NextResponse.json(
       { error: 'Unauthorized' },
@@ -109,8 +131,8 @@ export function middleware(request: NextRequest) {
   }
 
   const token = authHeader.substring(7); // Remove 'Bearer ' prefix
-  
-  if (token !== MC_API_TOKEN) {
+
+  if (!MC_API_TOKEN || !timingSafeCompare(token, MC_API_TOKEN)) {
     return NextResponse.json(
       { error: 'Unauthorized' },
       { status: 401 }

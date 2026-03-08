@@ -4,14 +4,14 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { existsSync } from 'fs';
+import { existsSync, realpathSync } from 'fs';
 import path from 'path';
 
 export const dynamic = 'force-dynamic';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export async function POST(request: NextRequest) {
   try {
@@ -30,44 +30,67 @@ export async function POST(request: NextRequest) {
       process.env.PROJECTS_PATH?.replace(/^~/, process.env.HOME || ''),
     ].filter(Boolean) as string[];
 
+    if (allowedPaths.length === 0) {
+      return NextResponse.json(
+        { error: 'No allowed directories configured (set WORKSPACE_BASE_PATH or PROJECTS_PATH)' },
+        { status: 403 }
+      );
+    }
+
     const normalizedPath = path.normalize(expandedPath);
-    const isAllowed = allowedPaths.some(allowed =>
-      normalizedPath.startsWith(path.normalize(allowed))
-    );
+
+    // Check if file/directory exists
+    if (!existsSync(normalizedPath)) {
+      return NextResponse.json(
+        { error: 'File or directory not found' },
+        { status: 404 }
+      );
+    }
+
+    // Resolve real path to prevent symlink attacks
+    let resolvedPath: string;
+    try {
+      resolvedPath = realpathSync(normalizedPath);
+    } catch {
+      return NextResponse.json(
+        { error: 'Access denied' },
+        { status: 403 }
+      );
+    }
+
+    const isAllowed = allowedPaths.some(allowed => {
+      try {
+        const resolvedAllowed = realpathSync(path.normalize(allowed));
+        return resolvedPath.startsWith(resolvedAllowed + path.sep) || resolvedPath === resolvedAllowed;
+      } catch {
+        return false;
+      }
+    });
 
     if (!isAllowed) {
-      console.warn(`[FILE] Blocked access to: ${filePath}`);
+      console.warn(`[SECURITY] Blocked file reveal outside allowed directories: ${filePath}`);
       return NextResponse.json(
         { error: 'Path not in allowed directories' },
         { status: 403 }
       );
     }
 
-    // Check if file/directory exists
-    if (!existsSync(normalizedPath)) {
-      return NextResponse.json(
-        { error: 'File or directory not found', path: normalizedPath },
-        { status: 404 }
-      );
-    }
-
     // Open in Finder (macOS) - reveal the file
+    // Use execFile (not exec) to prevent command injection — arguments are
+    // passed as an array and never interpreted by a shell.
     const platform = process.platform;
-    let command: string;
 
     if (platform === 'darwin') {
-      command = `open -R "${normalizedPath}"`;
+      await execFileAsync('open', ['-R', resolvedPath]);
     } else if (platform === 'win32') {
-      command = `explorer /select,"${normalizedPath}"`;
+      await execFileAsync('explorer', ['/select,', resolvedPath]);
     } else {
       // Linux - open containing folder
-      command = `xdg-open "${path.dirname(normalizedPath)}"`;
+      await execFileAsync('xdg-open', [path.dirname(resolvedPath)]);
     }
 
-    await execAsync(command);
-
-    console.log(`[FILE] Revealed: ${normalizedPath}`);
-    return NextResponse.json({ success: true, path: normalizedPath });
+    console.log(`[FILE] Revealed: ${resolvedPath}`);
+    return NextResponse.json({ success: true });
   } catch (error) {
     console.error('[FILE] Error revealing file:', error);
     return NextResponse.json(

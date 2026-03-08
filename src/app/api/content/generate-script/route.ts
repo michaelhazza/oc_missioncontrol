@@ -12,7 +12,14 @@ export async function POST(req: NextRequest) {
     }
 
     const litellmUrl = process.env.LITELLM_BASE_URL || 'http://localhost:4001/v1';
-    const apiKey = process.env.LITELLM_API_KEY || 'sk-MnURELSoVB1esn-kPRDz2Q';
+    const apiKey = process.env.LITELLM_API_KEY;
+
+    if (!apiKey) {
+      return NextResponse.json(
+        { error: 'LITELLM_API_KEY environment variable is not configured' },
+        { status: 503 }
+      );
+    }
 
     const prompt = `You are a professional content creator. Write a complete, engaging script for the following piece of content.
 
