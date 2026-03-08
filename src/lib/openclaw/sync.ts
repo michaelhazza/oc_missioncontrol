@@ -188,13 +188,13 @@ function handleCompletionByContentMatch(data: Record<string, unknown>, summary: 
 }
 
 /**
- * Mark a task as completed (moves to testing stage).
+ * Mark a task as completed (moves to review stage).
  */
 function completeTask(task: Task, summary: string, now: string): void {
-  // Move to testing (workflow engine will handle further transitions)
+  // Move to review — all completed tasks land here regardless of agent or task type
   run(
     `UPDATE tasks SET status = ?, sync_status = ?, gateway_completion_notes = ?, updated_at = ? WHERE id = ?`,
-    ['testing', 'synced', summary, now, task.id],
+    ['review', 'synced', summary, now, task.id],
   );
 
   // Set agent back to standby
