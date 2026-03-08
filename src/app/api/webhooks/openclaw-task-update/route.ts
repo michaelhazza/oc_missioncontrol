@@ -129,7 +129,7 @@ export async function POST(request: NextRequest) {
 
     // Handle specific event types
     if (eventType === 'task.completed' || eventType === 'task.failed') {
-      newStatus = eventType === 'task.completed' ? 'testing' : 'inbox';
+      newStatus = eventType === 'task.completed' ? 'review' : 'inbox';
     }
 
     // Find the local agent by gateway_agent_id
