@@ -2,10 +2,16 @@
   "name": "mission-control",
   "version": "1.4.0",
   "private": true,
+  "engines": {
+    "node": "24.x"
+  },
   "scripts": {
     "dev": "next dev -p 4000",
     "build": "next build",
+    "prestart": "node scripts/verify-native-deps.js --repair",
     "start": "next start -p 3000 -H 0.0.0.0",
+    "native:check": "node scripts/verify-native-deps.js",
+    "native:repair": "node scripts/verify-native-deps.js --repair",
     "lint": "next lint",
     "db:seed": "tsx src/lib/db/seed.ts",
     "db:backup": "sqlite3 mission-control.db 'PRAGMA wal_checkpoint(TRUNCATE);' && cp mission-control.db mission-control.db.backup && echo 'Backed up to mission-control.db.backup'",

@@ -28,6 +28,16 @@ cd mission-control
 npm install
 ```
 
+Mission Control is pinned to Node.js 24 because `better-sqlite3` contains a
+Node-version-specific native binary. If Node is upgraded after dependencies
+are installed, repair and verify the binding before restarting:
+
+```bash
+npm run native:repair
+```
+
+`npm start` performs this check automatically.
+
 ### 3. Configure Environment Variables
 
 ```bash
