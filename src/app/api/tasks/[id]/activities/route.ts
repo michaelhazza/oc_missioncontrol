@@ -106,25 +106,64 @@ export async function POST(
 
     const id = crypto.randomUUID();
 
-    // Insert activity
-    db.prepare(`
-      INSERT INTO task_activities (id, task_id, agent_id, activity_type, message, metadata)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run(
-      id,
-      taskId,
-      resolvedAgentId,
-      activity_type,
-      message,
-      metadata ? JSON.stringify(metadata) : null
-    );
+    const task = db.prepare(
+      'SELECT status, assigned_agent_id FROM tasks WHERE id = ?'
+    ).get(taskId) as { status: string; assigned_agent_id: string | null } | undefined;
+
+    if (!task) {
+      return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+    }
+
+    const now = new Date().toISOString();
+    let taskStarted = false;
+
+    const insertActivity = db.transaction(() => {
+      db.prepare(`
+        INSERT INTO task_activities (id, task_id, agent_id, activity_type, message, metadata)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(
+        id,
+        taskId,
+        resolvedAgentId,
+        activity_type,
+        message,
+        metadata ? JSON.stringify(metadata) : null
+      );
+
+      // A progress acknowledgement from the assigned agent is authoritative:
+      // the agent has accepted the task and started work. Keeping the task in
+      // "assigned" after this point makes the board disagree with reality.
+      if (
+        activity_type === 'progress' &&
+        task.status === 'assigned' &&
+        resolvedAgentId !== null &&
+        resolvedAgentId === task.assigned_agent_id
+      ) {
+        db.prepare(
+          'UPDATE tasks SET status = ?, planning_dispatch_error = NULL, updated_at = ? WHERE id = ?'
+        ).run('in_progress', now, taskId);
+        taskStarted = true;
+      }
+    });
+
+    insertActivity();
 
     // If activity_type is 'completed', also mark the task as done
     if (activity_type === 'completed') {
-      const now = new Date().toISOString();
       db.prepare('UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?').run('done', now, taskId);
 
       // Broadcast task update
+      const updatedTask = db.prepare(`
+        SELECT t.*, aa.name as assigned_agent_name, aa.avatar_emoji as assigned_agent_emoji
+        FROM tasks t LEFT JOIN agents aa ON t.assigned_agent_id = aa.id
+        WHERE t.id = ?
+      `).get(taskId);
+      if (updatedTask) {
+        broadcast({ type: 'task_updated', payload: updatedTask as any });
+      }
+    }
+
+    if (taskStarted) {
       const updatedTask = db.prepare(`
         SELECT t.*, aa.name as assigned_agent_name, aa.avatar_emoji as assigned_agent_emoji
         FROM tasks t LEFT JOIN agents aa ON t.assigned_agent_id = aa.id
