@@ -890,6 +890,35 @@ const migrations: Migration[] = [
       }
       console.log('[Migration 026] mattermost_channel added to agents');
     }
+  },
+  {
+    id: '027',
+    name: 'reconcile_agent_dispatch_schema',
+    up: (db) => {
+      console.log('[Migration 027] Reconciling agent dispatch schema...');
+
+      // A database restored from an older backup can retain a newer
+      // _migrations ledger. Re-check the columns required by current dispatch
+      // code instead of assuming the historical migration records are enough.
+      const taskColumns = db.prepare("PRAGMA table_info(tasks)").all() as { name: string }[];
+      if (!taskColumns.some(column => column.name === 'correlation_id')) {
+        db.exec('ALTER TABLE tasks ADD COLUMN correlation_id TEXT');
+      }
+      db.exec('CREATE INDEX IF NOT EXISTS idx_tasks_correlation_id ON tasks(correlation_id)');
+
+      const agentColumns = db.prepare("PRAGMA table_info(agents)").all() as { name: string }[];
+      if (!agentColumns.some(column => column.name === 'mc_role')) {
+        db.exec('ALTER TABLE agents ADD COLUMN mc_role TEXT');
+      }
+      if (!agentColumns.some(column => column.name === 'frontmatter_parse_error')) {
+        db.exec('ALTER TABLE agents ADD COLUMN frontmatter_parse_error INTEGER NOT NULL DEFAULT 0');
+      }
+      if (!agentColumns.some(column => column.name === 'mattermost_channel')) {
+        db.exec('ALTER TABLE agents ADD COLUMN mattermost_channel TEXT');
+      }
+
+      console.log('[Migration 027] Agent dispatch schema reconciled');
+    }
   }
 ];
 
