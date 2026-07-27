@@ -323,8 +323,11 @@ export class OpenClawClient extends EventEmitter {
                 id: requestId,
                 method: 'connect',
                 params: {
-                  minProtocol: 3,
-                  maxProtocol: 3,
+                  // OpenClaw 2026.7+ speaks Gateway protocol v4.
+                  // Keep this explicit so a protocol upgrade fails clearly
+                  // instead of presenting a healthy local service as offline.
+                  minProtocol: 4,
+                  maxProtocol: 4,
                   client: {
                     id: clientId,
                     version: '1.0.1',

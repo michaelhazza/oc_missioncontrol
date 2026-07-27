@@ -2,12 +2,14 @@ import { NextRequest, NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import { queryAll, queryOne, run } from '@/lib/db';
 import type { Agent, CreateAgentRequest } from '@/lib/types';
+import { reconcileAgentStatuses } from '@/lib/openclaw/agent-registry';
 
 export const dynamic = 'force-dynamic';
 // GET /api/agents - List all agents
 export async function GET(request: NextRequest) {
   try {
     const workspaceId = request.nextUrl.searchParams.get('workspace_id');
+    reconcileAgentStatuses(workspaceId || undefined);
     
     let agents: Agent[];
     if (workspaceId) {

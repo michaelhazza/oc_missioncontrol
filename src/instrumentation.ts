@@ -16,15 +16,21 @@ export async function register() {
     const { registerCompletionListener } = await import('./lib/openclaw/sync');
     const { startRetryQueue } = await import('./lib/openclaw/retry-queue');
     const { startMonitorCron } = await import('./lib/openclaw/monitor-cron');
+    const { syncConfiguredAgents, reconcileAgentStatuses } = await import('./lib/openclaw/agent-registry');
 
     // Initialise gateway connection (non-blocking — uses auto-reconnect)
     try {
       const client = getOpenClawClient();
       await client.connect();
       console.log('[Instrumentation] Gateway client connected');
+      const synced = await syncConfiguredAgents(client);
+      console.log(`[Instrumentation] Synced ${synced} configured agent identity record(s)`);
     } catch (err) {
       console.warn('[Instrumentation] Gateway client connection failed — will auto-reconnect:', err);
     }
+
+    const reconciled = reconcileAgentStatuses();
+    console.log(`[Instrumentation] Reconciled ${reconciled} agent status record(s)`);
 
     // Register WebSocket event listener for completions
     registerCompletionListener();

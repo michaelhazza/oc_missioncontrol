@@ -12,6 +12,10 @@ interface GatewayAgent {
   id?: string;
   name?: string;
   label?: string;
+  identity?: {
+    name?: string;
+    emoji?: string;
+  };
   model?: string;
   channel?: string;
   status?: string;
@@ -67,7 +71,7 @@ export async function GET() {
       const frontmatter = parseAgentFrontmatter(gatewayId);
       return {
         id: gatewayId,
-        name: ga.name || ga.label || gatewayId,
+        name: ga.identity?.name || ga.name || ga.label || gatewayId,
         label: ga.label,
         model: ga.model,
         channel: ga.channel,
