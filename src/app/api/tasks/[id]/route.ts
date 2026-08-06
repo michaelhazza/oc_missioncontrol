@@ -45,7 +45,7 @@ export async function PATCH(
 ) {
   try {
     const { id } = await params;
-    const body: UpdateTaskRequest & { updated_by_agent_id?: string } = await request.json();
+    const body: UpdateTaskRequest & { updated_by_agent_id?: string; status_reason?: string } = await request.json();
 
     // Validate input with Zod
     const validation = UpdateTaskSchema.safeParse(body);
@@ -58,6 +58,9 @@ export async function PATCH(
 
     const validatedData = validation.data;
     let nextStatus = validatedData.status;
+    const transitionSource = request.headers.get('x-mc-transition-source') || 'api';
+    const actorId = validatedData.updated_by_agent_id || request.headers.get('x-mc-actor-id');
+    const actorType = request.headers.get('x-mc-actor-type') || (actorId ? 'agent' : 'user');
 
     const existing = queryOne<Task>('SELECT * FROM tasks WHERE id = ?', [id]);
     if (!existing) {
@@ -167,9 +170,10 @@ export async function PATCH(
       // Log status change event
       const eventType = nextStatus === 'done' ? 'task_completed' : 'task_status_changed';
       run(
-        `INSERT INTO events (id, type, task_id, message, created_at)
-         VALUES (?, ?, ?, ?, ?)`,
-        [uuidv4(), eventType, id, `Task "${existing.title}" moved to ${nextStatus}`, now]
+        `INSERT INTO events (id, type, agent_id, task_id, message, metadata, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [uuidv4(), eventType, actorId || null, id, `Task "${existing.title}" moved from ${existing.status} to ${nextStatus}`,
+          JSON.stringify({ actorType, actorId: actorId || null, source: transitionSource, from: existing.status, to: nextStatus, reason: body.status_reason || null }), now]
       );
     }
 

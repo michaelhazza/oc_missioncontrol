@@ -18,7 +18,8 @@ interface MissionQueueProps {
 const COLUMNS: { id: TaskStatus; label: string; color: string }[] = [
   { id: 'planning', label: '📋 Planning', color: 'border-t-mc-accent-purple' },
   { id: 'inbox', label: 'Inbox', color: 'border-t-mc-accent-pink' },
-  { id: 'assigned', label: 'Assigned', color: 'border-t-mc-accent-yellow' },
+  { id: 'assigned', label: 'Queued', color: 'border-t-mc-accent-yellow' },
+  { id: 'paused', label: 'Paused', color: 'border-t-slate-500' },
   { id: 'in_progress', label: 'In Progress', color: 'border-t-mc-accent' },
   { id: 'testing', label: 'Testing', color: 'border-t-mc-accent-cyan' },
   { id: 'review', label: 'Review', color: 'border-t-mc-accent-purple' },
