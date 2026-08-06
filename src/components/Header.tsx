@@ -90,7 +90,7 @@ export function Header({ workspace, isPortrait = true }: HeaderProps) {
             <div className="flex-1 grid grid-cols-2 gap-2">
               <div className="min-h-11 rounded border border-mc-border bg-mc-bg-tertiary px-2 flex items-center justify-center gap-1.5 text-xs">
                 <span className="text-mc-accent-cyan font-semibold">{activeAgents}</span>
-                <span className="text-mc-text-secondary">active</span>
+                <span className="text-mc-text-secondary">recently active</span>
               </div>
               <div className="min-h-11 rounded border border-mc-border bg-mc-bg-tertiary px-2 flex items-center justify-center gap-1.5 text-xs">
                 <span className="text-mc-accent-purple font-semibold">{openTasks}</span>
@@ -131,7 +131,7 @@ export function Header({ workspace, isPortrait = true }: HeaderProps) {
             <div className="hidden lg:flex items-center gap-8">
               <div className="text-center">
                 <div className="text-2xl font-bold text-mc-accent-cyan">{activeAgents}</div>
-                <div className="text-xs text-mc-text-secondary uppercase">Agents Active</div>
+                <div className="text-xs text-mc-text-secondary uppercase">Agents Recently Active</div>
               </div>
               <div className="text-center">
                 <div className="text-2xl font-bold text-mc-accent-purple">{openTasks}</div>

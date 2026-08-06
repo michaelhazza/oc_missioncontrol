@@ -158,7 +158,7 @@ export function AgentsSidebar({ workspaceId, mobileMode = false, isPortrait = tr
                     filter === tab ? 'bg-mc-accent text-mc-bg font-medium' : 'text-mc-text-secondary hover:bg-mc-bg-tertiary'
                   }`}
                 >
-                  {tab}
+                  {tab === 'working' ? 'active' : tab}
                 </button>
               ))}
             </div>
@@ -227,7 +227,9 @@ export function AgentsSidebar({ workspaceId, mobileMode = false, isPortrait = tr
                   </div>
                 </div>
 
-                <span className={`text-xs px-2 py-0.5 rounded uppercase ${getStatusBadge(agent.status)}`}>{agent.status}</span>
+                <span className={`text-xs px-2 py-0.5 rounded uppercase ${getStatusBadge(agent.status)}`}>
+                  {agent.status === 'working' ? 'active' : agent.status}
+                </span>
               </button>
 
               {!!agent.is_master && (
