@@ -82,8 +82,9 @@ export async function runTaskWatchdogCheck(now = new Date()): Promise<'no-task' 
     `SELECT t.*, a.name AS agent_name, a.gateway_agent_id, a.session_key_prefix
      FROM tasks t
      JOIN agents a ON a.id = t.assigned_agent_id
-     WHERE a.gateway_agent_id = ? AND t.status = 'in_progress'
-     ORDER BY COALESCE(t.updated_at, t.created_at) ASC
+     WHERE a.gateway_agent_id = ? AND t.status IN ('in_progress', 'assigned')
+     ORDER BY CASE WHEN t.status = 'in_progress' THEN 0 ELSE 1 END,
+              COALESCE(t.updated_at, t.created_at) ASC
      LIMIT 1`,
     [WATCHDOG_AGENT_ID],
   );
