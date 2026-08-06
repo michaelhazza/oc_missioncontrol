@@ -9,6 +9,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { formatDistanceToNow } from 'date-fns';
 import type { TaskActivity } from '@/lib/types';
+import { parseDatabaseDate } from '@/lib/dates';
 
 interface ActivityLogProps {
   taskId: string;
@@ -206,7 +207,7 @@ export function ActivityLog({ taskId }: ActivityLogProps) {
 
             {/* Timestamp */}
             <div className="text-xs text-mc-text-secondary mt-2">
-              {formatDistanceToNow(new Date(activity.created_at), { addSuffix: true })}
+              {formatDistanceToNow(parseDatabaseDate(activity.created_at), { addSuffix: true })}
             </div>
           </div>
         </div>

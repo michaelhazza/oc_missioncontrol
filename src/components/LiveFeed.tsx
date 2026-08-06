@@ -5,6 +5,7 @@ import { ChevronRight, ChevronLeft, Clock } from 'lucide-react';
 import { useMissionControl } from '@/lib/store';
 import type { Event } from '@/lib/types';
 import { formatDistanceToNow } from 'date-fns';
+import { parseDatabaseDate } from '@/lib/dates';
 
 type FeedFilter = 'all' | 'tasks' | 'agents';
 
@@ -117,7 +118,7 @@ function EventItem({ event }: { event: Event }) {
           <p className={`text-sm ${isTaskEvent ? 'text-mc-accent-pink' : 'text-mc-text'}`}>{event.message}</p>
           <div className="flex items-center gap-1 mt-1 text-xs text-mc-text-secondary">
             <Clock className="w-3 h-3" />
-            {formatDistanceToNow(new Date(event.created_at), { addSuffix: true })}
+            {formatDistanceToNow(parseDatabaseDate(event.created_at), { addSuffix: true })}
           </div>
         </div>
       </div>

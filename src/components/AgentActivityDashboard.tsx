@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, AlertTriangle, Activity, Clock, Filter, RefreshCw } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
+import { parseDatabaseDate } from '@/lib/dates';
 import type { Agent, Event, Task, Workspace } from '@/lib/types';
 
 type ActivityFilter = 'all' | 'working' | 'blocked' | 'idle';
@@ -249,7 +250,7 @@ export function AgentActivityDashboard({ workspace }: AgentActivityDashboardProp
                     </div>
                     <div className="text-xs text-mc-text-secondary whitespace-nowrap flex items-center gap-1">
                       <Clock className="w-3 h-3" />
-                      {formatDistanceToNow(new Date(currentTask?.updated_at || agent.updated_at), { addSuffix: true })}
+                      {formatDistanceToNow(parseDatabaseDate(currentTask?.updated_at || agent.updated_at), { addSuffix: true })}
                     </div>
                   </div>
                 </div>
@@ -288,7 +289,7 @@ export function AgentActivityDashboard({ workspace }: AgentActivityDashboardProp
                       <span className={`text-xs px-2 py-1 rounded uppercase ${agent.status === 'working' ? 'status-working' : agent.status === 'offline' ? 'status-offline' : 'status-standby'}`}>
                         {agent.status}
                       </span>
-                      <div className="text-[11px] text-mc-text-secondary mt-1">Updated {formatDistanceToNow(new Date(agent.updated_at), { addSuffix: true })}</div>
+                      <div className="text-[11px] text-mc-text-secondary mt-1">Updated {formatDistanceToNow(parseDatabaseDate(agent.updated_at), { addSuffix: true })}</div>
                     </div>
                   </div>
 
@@ -307,7 +308,7 @@ export function AgentActivityDashboard({ workspace }: AgentActivityDashboardProp
                       agentTimeline.map((event) => (
                         <div key={event.id} className="rounded-lg border border-mc-border bg-mc-bg px-3 py-2.5 min-h-11">
                           <div className="text-sm leading-snug">{event.message}</div>
-                          <div className="text-[11px] text-mc-text-secondary mt-1">{formatDistanceToNow(new Date(event.created_at), { addSuffix: true })}</div>
+                          <div className="text-[11px] text-mc-text-secondary mt-1">{formatDistanceToNow(parseDatabaseDate(event.created_at), { addSuffix: true })}</div>
                         </div>
                       ))
                     )}

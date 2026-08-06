@@ -7,6 +7,7 @@ import { triggerAutoDispatch, shouldTriggerAutoDispatch } from '@/lib/auto-dispa
 import type { Task, TaskStatus } from '@/lib/types';
 import { TaskModal } from './TaskModal';
 import { formatDistanceToNow } from 'date-fns';
+import { parseDatabaseDate } from '@/lib/dates';
 
 interface MissionQueueProps {
   workspaceId?: string;
@@ -348,7 +349,7 @@ function TaskCard({ task, onDragStart, onClick, onMoveStatus, isDragging, mobile
             <div className={`w-1.5 h-1.5 rounded-full ${priorityDots[task.priority]}`} />
             <span className={`text-xs capitalize ${priorityStyles[task.priority]}`}>{task.priority}</span>
           </div>
-          <span className="text-[10px] text-mc-text-secondary/60">{formatDistanceToNow(new Date(task.created_at), { addSuffix: true })}</span>
+          <span className="text-[10px] text-mc-text-secondary/60">{formatDistanceToNow(parseDatabaseDate(task.created_at), { addSuffix: true })}</span>
         </div>
 
         {mobileMode && (
