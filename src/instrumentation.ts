@@ -16,6 +16,7 @@ export async function register() {
     const { registerCompletionListener } = await import('./lib/openclaw/sync');
     const { startRetryQueue } = await import('./lib/openclaw/retry-queue');
     const { startMonitorCron } = await import('./lib/openclaw/monitor-cron');
+    const { startTaskWatchdog } = await import('./lib/openclaw/task-watchdog');
     const { syncConfiguredAgents, reconcileAgentStatuses } = await import('./lib/openclaw/agent-registry');
 
     // Initialise gateway connection (non-blocking — uses auto-reconnect)
@@ -40,6 +41,9 @@ export async function register() {
 
     // Start monitor cron (interval from workspace_settings)
     startMonitorCron();
+
+    // Resume stale Tank work every 30 minutes without duplicating live sessions.
+    startTaskWatchdog();
 
     // Warn if OPENCLAW_WEBHOOK_SECRET is not set
     if (!process.env.OPENCLAW_WEBHOOK_SECRET) {
