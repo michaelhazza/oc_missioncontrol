@@ -44,7 +44,9 @@ export function Header({ workspace, isPortrait = true }: HeaderProps) {
 
   const workingAgents = agents.filter((a) => a.status === 'working').length;
   const activeAgents = workingAgents + activeSubAgents;
-  const tasksInQueue = tasks.filter((t) => t.status !== 'done' && t.status !== 'review').length;
+  // This is the number of unfinished tasks across active workflow stages. It
+  // is not a FIFO queue: tasks may already be running or awaiting verification.
+  const openTasks = tasks.filter((t) => t.status !== 'done' && t.status !== 'review').length;
 
   const portraitWorkspaceHeader = !!workspace && isPortrait;
 
@@ -91,8 +93,8 @@ export function Header({ workspace, isPortrait = true }: HeaderProps) {
                 <span className="text-mc-text-secondary">active</span>
               </div>
               <div className="min-h-11 rounded border border-mc-border bg-mc-bg-tertiary px-2 flex items-center justify-center gap-1.5 text-xs">
-                <span className="text-mc-accent-purple font-semibold">{tasksInQueue}</span>
-                <span className="text-mc-text-secondary">queued</span>
+                <span className="text-mc-accent-purple font-semibold">{openTasks}</span>
+                <span className="text-mc-text-secondary">open tasks</span>
               </div>
             </div>
           </div>
@@ -132,8 +134,8 @@ export function Header({ workspace, isPortrait = true }: HeaderProps) {
                 <div className="text-xs text-mc-text-secondary uppercase">Agents Active</div>
               </div>
               <div className="text-center">
-                <div className="text-2xl font-bold text-mc-accent-purple">{tasksInQueue}</div>
-                <div className="text-xs text-mc-text-secondary uppercase">Tasks in Queue</div>
+                <div className="text-2xl font-bold text-mc-accent-purple">{openTasks}</div>
+                <div className="text-xs text-mc-text-secondary uppercase">Open Tasks</div>
               </div>
             </div>
           )}

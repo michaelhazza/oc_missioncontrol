@@ -21,6 +21,19 @@ interface WorkspaceIdentity {
 }
 
 const EXECUTING_TASK_STATUSES = ['in_progress', 'testing', 'verification'];
+const RECENT_AGENT_ACTIVITY_MS = 5 * 60 * 1000;
+
+function hasRecentSessionActivity(gatewayAgentId: string, nowMs = Date.now()): boolean {
+  const sessionsDir = path.join(os.homedir(), '.openclaw', 'agents', gatewayAgentId, 'sessions');
+
+  try {
+    return fs.readdirSync(sessionsDir)
+      .filter(file => file.endsWith('.jsonl'))
+      .some(file => nowMs - fs.statSync(path.join(sessionsDir, file)).mtimeMs <= RECENT_AGENT_ACTIVITY_MS);
+  } catch {
+    return false;
+  }
+}
 
 function identityPath(gatewayAgentId: string): string {
   const workspace = path.join(os.homedir(), '.openclaw', 'workspace');
@@ -86,8 +99,9 @@ export async function syncConfiguredAgents(client: OpenClawClient): Promise<numb
 }
 
 /**
- * Agent activity is derived from Mission Control task state, not a sticky flag.
- * This prevents agents remaining "working" after tasks are closed out-of-band.
+ * Agent activity requires both executable task state and recent OpenClaw
+ * session activity. Task state alone only means work remains; it is not proof
+ * that an agent is physically executing now.
  */
 export function reconcileAgentStatuses(workspaceId?: string): number {
   const agents = queryAll<Agent>(
@@ -101,12 +115,14 @@ export function reconcileAgentStatuses(workspaceId?: string): number {
 
   for (const agent of agents) {
     const placeholders = EXECUTING_TASK_STATUSES.map(() => '?').join(', ');
-    const active = queryAll<{ id: string }>(
+    const hasExecutingTask = queryAll<{ id: string }>(
       `SELECT id FROM tasks
        WHERE assigned_agent_id = ? AND status IN (${placeholders})
        LIMIT 1`,
       [agent.id, ...EXECUTING_TASK_STATUSES],
     ).length > 0;
+    const gatewayId = agent.gateway_agent_id;
+    const active = hasExecutingTask && !!gatewayId && hasRecentSessionActivity(gatewayId);
     const status = active ? 'working' : 'standby';
 
     if (agent.status !== status) {
