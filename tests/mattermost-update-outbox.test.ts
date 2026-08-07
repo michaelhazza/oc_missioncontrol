@@ -15,6 +15,11 @@ test('queues only thread-rooted semantic milestones with idempotency and cooldow
   assert.equal(updates.queueMattermostMilestone('unthreaded','dispatched','no destination','unthreaded-key',t0),null);
 });
 
+test('extracts the provider post ID from OpenClaw direct and nested JSON',()=>{
+  assert.equal(updates.parseProviderMessageId('{"messageId":"direct"}'),'direct');
+  assert.equal(updates.parseProviderMessageId('{"payload":{"result":{"messageId":"nested"}}}'),'nested');
+});
+
 test('fenced outbox survives restart, delivers once, and records thread evidence',async()=>{
   db.run("UPDATE mattermost_task_update_outbox SET state='delivering',claim_owner='dead-process',claim_expires_at=?",[new Date(t0.getTime()-1).toISOString()]);
   let sends=0;let observed:any;

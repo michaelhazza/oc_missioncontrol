@@ -37,8 +37,12 @@ export function queueMattermostMilestone(taskId:string,milestone:keyof typeof se
 
 export async function defaultMattermostSender(item:MilestoneDelivery):Promise<{messageId?:string}>{
   const {stdout}=await execFile('openclaw',['message','send','--account','switch','--channel','mattermost','--target',item.channel_id,'--reply-to',item.root_post_id,'--message',item.message,'--json'],{timeout:30_000,maxBuffer:1024*1024});
-  const parsed=JSON.parse(stdout||'{}') as {messageId?:string;message_id?:string;id?:string};
-  return{messageId:parsed.messageId||parsed.message_id||parsed.id};
+  return{messageId:parseProviderMessageId(stdout)};
+}
+
+export function parseProviderMessageId(stdout:string):string|undefined{
+  const parsed=JSON.parse(stdout||'{}') as {messageId?:string;message_id?:string;id?:string;result?:{messageId?:string};payload?:{messageId?:string;result?:{messageId?:string}}};
+  return parsed.messageId||parsed.message_id||parsed.id||parsed.result?.messageId||parsed.payload?.messageId||parsed.payload?.result?.messageId;
 }
 
 export async function drainMattermostOutbox(now=new Date(),sender=defaultMattermostSender):Promise<{delivered:number;failed:number}>{
