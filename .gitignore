@@ -40,3 +40,4 @@ Thumbs.db
 # Misc
 *.backup
 mission-control.db.backup
+backups/
