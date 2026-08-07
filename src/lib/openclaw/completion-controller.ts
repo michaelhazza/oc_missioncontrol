@@ -53,7 +53,7 @@ export function classifyTask(task:TaskRow,now=new Date()):Decision{
   const ageMs=now.getTime()-Date.parse(task.updated_at);
   let classification:CompletionClassification,reason:string,action:string|undefined,authority:Authority='controller';
   if(dependencies.some(dep=>dep.status!=='done')){classification='awaiting_dependency';reason='One or more prerequisite tasks are non-terminal';}
-  else if(execution?.state==='stalled'||(task.status==='in_progress'&&(!execution||!execution.lease_expires_at||Date.parse(execution.lease_expires_at)<=now.getTime()))){classification='stalled';reason='Execution supervision owns stale-run recovery';authority='oracle';}
+  else if(task.status==='in_progress'&&(execution?.state==='stalled'||!execution||!execution.lease_expires_at||Date.parse(execution.lease_expires_at)<=now.getTime())){classification='stalled';reason='Execution supervision owns stale-run recovery';authority='oracle';}
   else if(task.status==='in_progress'&&execution&&execution.lease_expires_at&&Date.parse(execution.lease_expires_at)>now.getTime()){classification='healthy_running';reason='Valid fenced execution lease; no controller action';authority='specialist';}
   else if(task.status==='assigned'&&!execution){classification='awaiting_agent';reason='Assigned task has not been dispatched through durable execution';action='dispatch';authority='controller';}
   else if(task.status==='pending_dispatch'){classification='awaiting_agent';reason='Task is ready for assignment or dispatch';action=task.assigned_agent_id?'dispatch':'oracle_assignment';authority=task.assigned_agent_id?'controller':'oracle';}
