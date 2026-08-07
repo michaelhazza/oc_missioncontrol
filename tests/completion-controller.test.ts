@@ -41,6 +41,8 @@ test('active scan promotes an identical dry-run action and drains it once',async
   db.run("INSERT INTO task_activities(id,task_id,agent_id,activity_type,message) VALUES('promote-v','promote-close','reviewer','verification_passed','passed')");
   await controller.runCompletionScan('dry_run',new Date(t0.getTime()+540_000));
   const proposed=db.queryOne<{id:string;state:string}>("SELECT id,state FROM completion_controller_actions WHERE task_id='promote-close' AND action_type='close'")!;assert.equal(proposed.state,'proposed');
+  db.run("DELETE FROM completion_controller_actions WHERE task_id!='promote-close'");
+  db.run("UPDATE tasks SET status='done' WHERE id!='promote-close'");
   await controller.runCompletionScan('active',new Date(t0.getTime()+720_000));
   assert.equal(db.queryOne<{status:string}>("SELECT status FROM tasks WHERE id='promote-close'")!.status,'done');
   assert.equal(db.queryOne<{id:string;state:string}>("SELECT id,state FROM completion_controller_actions WHERE id=?",[proposed.id])!.state,'completed');
