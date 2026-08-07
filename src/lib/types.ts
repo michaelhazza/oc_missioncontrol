@@ -266,7 +266,7 @@ export interface OpenClawSession {
 
 export type TriggerType = 'manual' | 'cron' | 'agent' | 'webhook';
 
-export type ActivityType = 'spawned' | 'updated' | 'completed' | 'file_created' | 'status_changed' | 'created' | 'assigned' | 'progress' | 'blocked' | 'note';
+export type ActivityType = 'spawned' | 'updated' | 'completed' | 'file_created' | 'status_changed' | 'created' | 'assigned' | 'progress' | 'blocked' | 'note' | 'verification_passed' | 'verification_failed' | 'completion_contract_passed' | 'test_passed';
 
 export interface TaskActivity {
   id: string;

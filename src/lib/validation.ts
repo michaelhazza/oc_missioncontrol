@@ -29,7 +29,11 @@ const ActivityType = z.enum([
   'assigned',
   'progress',
   'blocked',
-  'note'
+  'note',
+  'verification_passed',
+  'verification_failed',
+  'completion_contract_passed',
+  'test_passed'
 ]);
 
 const DeliverableType = z.enum(['file', 'url', 'artifact']);
