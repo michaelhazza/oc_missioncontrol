@@ -14,6 +14,13 @@ type Authority='specialist'|'verifier'|'oracle'|'tank'|'michael'|'controller';
 interface TaskRow{ id:string;title:string;status:string;brief:string|null;status_reason:string|null;assigned_agent_id:string|null;workflow_template_id:string|null;updated_at:string; }
 export interface Decision{taskId:string;classification:CompletionClassification;reason:string;action?:string;authority:Authority;evidence:Record<string,unknown>;fingerprint:string}
 
+export function buildAuthoritySessionKey(agent:{name:string;session_key_prefix:string|null;gateway_agent_id:string|null},sessionId?:string|null){
+  const prefix=agent.session_key_prefix||`agent:${agent.gateway_agent_id||agent.name.toLowerCase()}:`;
+  return `${prefix}${sessionId||'main'}`;
+}
+
+export function actionRequiresResolution(authority:Authority){return authority==='oracle'}
+
 function stable(value:unknown){return createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0,24)}
 
 function acquire(owner:string,now:Date){
@@ -34,7 +41,7 @@ export function classifyTask(task:TaskRow,now=new Date()):Decision{
   const deliverables=queryOne<{count:number}>('SELECT COUNT(*) AS count FROM task_deliverables WHERE task_id=?',[task.id])?.count||0;
   const completionEvidence=queryOne<{count:number}>("SELECT COUNT(*) AS count FROM task_activities WHERE task_id=? AND activity_type='completed'",[task.id])?.count||0;
   const objectiveEvidence=queryOne<{count:number}>("SELECT COUNT(*) AS count FROM task_activities WHERE task_id=? AND activity_type IN ('verification_passed','completion_contract_passed','test_passed')",[task.id])?.count||0;
-  const verificationFailure=queryOne<{message:string}>("SELECT message FROM task_activities WHERE task_id=? AND activity_type='verification_failed' ORDER BY created_at DESC LIMIT 1",[task.id]);
+  const latestVerification=queryOne<{activity_type:string;message:string}>("SELECT activity_type,message FROM task_activities WHERE task_id=? AND activity_type IN ('verification_failed','verification_passed','completion_contract_passed','test_passed') ORDER BY created_at DESC,id DESC LIMIT 1",[task.id]);
   const independentVerifier=queryOne<{agent_id:string;role:string}>("SELECT agent_id,role FROM task_roles WHERE task_id=? AND role IN ('tester','reviewer','verifier') AND agent_id!=COALESCE(?, '') LIMIT 1",[task.id,task.assigned_agent_id]);
   const ageMs=now.getTime()-Date.parse(task.updated_at);
   let classification:CompletionClassification,reason:string,action:string|undefined,authority:Authority='controller';
@@ -45,7 +52,7 @@ export function classifyTask(task:TaskRow,now=new Date()):Decision{
   else if(task.status==='pending_dispatch'||task.status==='inbox'){classification='awaiting_agent';reason='Task is ready for assignment or dispatch';action=task.assigned_agent_id?'dispatch':'oracle_assignment';authority=task.assigned_agent_id?'controller':'oracle';}
   else if(task.status==='blocked'&&/michael|approval|authority|spend|production/i.test(task.status_reason||task.brief||'')){classification='awaiting_human_authority';reason='Explicit Michael-only authority gate';action='escalate_michael';authority='michael';}
   else if(task.status==='blocked'){classification='blocked';reason=task.status_reason||'Task is intentionally blocked';action='oracle_review';authority='oracle';}
-  else if(['testing','verification','review'].includes(task.status)&&verificationFailure){classification='failed';reason=`Verification failed: ${verificationFailure.message}`;action='return_rework';authority='tank';}
+  else if(['testing','verification','review'].includes(task.status)&&latestVerification?.activity_type==='verification_failed'){classification='failed';reason=`Verification failed: ${latestVerification.message}`;action='return_rework';authority='specialist';}
   else if(['testing','verification','review'].includes(task.status)&&independentVerifier&&objectiveEvidence===0){classification='awaiting_verification';reason=`Independent ${independentVerifier.role} is required by task roles`;action='request_verification';authority='verifier';}
   else if(['testing','verification','review'].includes(task.status)&&deliverables>0&&completionEvidence>0&&objectiveEvidence>0){classification='ready_to_close';reason='Objective completion contract, completion activity, and deliverable evidence all exist';action='close';authority='controller';}
   else if(['testing','verification','review'].includes(task.status)){classification='awaiting_verification';reason='Completion contract lacks deliverable or completion evidence';action='oracle_review';authority='oracle';}
@@ -58,18 +65,29 @@ export function classifyTask(task:TaskRow,now=new Date()):Decision{
 async function deliverAuthorityAction(decision:Decision,actionId:string){
   const task=queryOne<TaskRow & {mattermost_channel_id:string|null;mattermost_root_post_id:string|null;mattermost_thread_url:string|null}>('SELECT id,title,status,brief,status_reason,assigned_agent_id,workflow_template_id,updated_at,mattermost_channel_id,mattermost_root_post_id,mattermost_thread_url FROM tasks WHERE id=?',[decision.taskId]);
   if(!task)throw new Error('Task not found for controller delivery');
-  let agent=queryOne<{id:string;name:string;session_key_prefix:string|null}>('SELECT id,name,session_key_prefix FROM agents WHERE lower(name)=? LIMIT 1',[decision.authority==='tank'?'tank':decision.authority==='oracle'?'oracle':'']);
-  if(decision.authority==='verifier')agent=queryOne<{id:string;name:string;session_key_prefix:string|null}>("SELECT a.id,a.name,a.session_key_prefix FROM task_roles r JOIN agents a ON a.id=r.agent_id WHERE r.task_id=? AND r.role IN ('tester','reviewer','verifier') AND a.id!=COALESCE(?, '') LIMIT 1",[decision.taskId,task.assigned_agent_id]);
-  if(decision.authority==='michael')agent=queryOne<{id:string;name:string;session_key_prefix:string|null}>("SELECT id,name,session_key_prefix FROM agents WHERE is_master=1 OR lower(name)='switch' ORDER BY is_master DESC LIMIT 1");
+  let agent=queryOne<{id:string;name:string;session_key_prefix:string|null;gateway_agent_id:string|null}>('SELECT id,name,session_key_prefix,gateway_agent_id FROM agents WHERE lower(name)=? LIMIT 1',[decision.authority==='tank'?'tank':decision.authority==='oracle'?'oracle':'']);
+  if(decision.authority==='specialist')agent=queryOne<{id:string;name:string;session_key_prefix:string|null;gateway_agent_id:string|null}>('SELECT id,name,session_key_prefix,gateway_agent_id FROM agents WHERE id=? LIMIT 1',[task.assigned_agent_id]);
+  if(decision.authority==='verifier')agent=queryOne<{id:string;name:string;session_key_prefix:string|null;gateway_agent_id:string|null}>("SELECT a.id,a.name,a.session_key_prefix,a.gateway_agent_id FROM task_roles r JOIN agents a ON a.id=r.agent_id WHERE r.task_id=? AND r.role IN ('tester','reviewer','verifier') AND a.id!=COALESCE(?, '') LIMIT 1",[decision.taskId,task.assigned_agent_id]);
+  if(decision.authority==='michael')agent=queryOne<{id:string;name:string;session_key_prefix:string|null;gateway_agent_id:string|null}>("SELECT id,name,session_key_prefix,gateway_agent_id FROM agents WHERE is_master=1 OR lower(name)='switch' ORDER BY is_master DESC LIMIT 1");
   if(!agent)throw new Error(`No delivery owner configured for ${decision.authority}`);
   const session=queryOne<{openclaw_session_id:string}>('SELECT openclaw_session_id FROM openclaw_sessions WHERE agent_id=? AND status=? ORDER BY updated_at DESC LIMIT 1',[agent.id,'active']);
-  const sessionKey=session?`${agent.session_key_prefix||'agent:main:'}${session.openclaw_session_id}`:(agent.session_key_prefix||`agent:${agent.name.toLowerCase()}:main`);
+  const sessionKey=buildAuthoritySessionKey(agent,session?.openclaw_session_id);
   const thread=decision.authority==='michael'&&task.mattermost_root_post_id?` Deliver the decision request in Mattermost channel ${task.mattermost_channel_id||'(originating channel)'}, replying to root post ${task.mattermost_root_post_id}${task.mattermost_thread_url?` (${task.mattermost_thread_url})`:''}; never create a top-level message.`:'';
   const client=getOpenClawClient();if(!client.isConnected())await client.connect();
-  await client.call('chat.send',{sessionKey,idempotencyKey:`completion-controller-${actionId}`,message:`Mission Control completion action ${actionId} for task ${task.id} (${task.title}). Classification: ${decision.classification}. Required action: ${decision.action}. Reason: ${decision.reason}.${thread} Acknowledge and resolve through Mission Control; do not create duplicate work.`});
+  const resolution=decision.authority==='oracle'?` Review the task brief, completion notes, and every linked deliverable. Resolve action ${actionId} through PATCH /api/oracle/completion-controller/${actionId} with resolution passed, rework, or cancelled and a specific evidence-based note. Process only this action; Mission Control will release the next review after resolution.`:' Resolve through Mission Control with evidence; do not create duplicate work.';
+  await client.call('chat.send',{sessionKey,idempotencyKey:`completion-controller-${actionId}`,message:`Mission Control completion action ${actionId} for task ${task.id} (${task.title}). Classification: ${decision.classification}. Required action: ${decision.action}. Reason: ${decision.reason}.${thread}${resolution}`});
+}
+
+export function hasUnresolvedAuthorityAction(authority:Authority,excludeActionId?:string){
+  return Boolean(queryOne<{id:string}>(`SELECT id FROM completion_controller_actions
+    WHERE authority=? AND delivered_at IS NOT NULL AND resolution_status IS NULL
+      AND (? IS NULL OR id!=?) LIMIT 1`,[authority,excludeActionId||null,excludeActionId||null]));
 }
 
 async function executeAction(decision:Decision,actionId:string,owner:string,now:Date){
+  const external=!['dispatch','close'].includes(decision.action||'');
+  const requiresResolution=actionRequiresResolution(decision.authority);
+  if(requiresResolution&&hasUnresolvedAuthorityAction(decision.authority,actionId))return false;
   const claimed=run(`UPDATE completion_controller_actions SET state='executing',claim_owner=?,claim_expires_at=?,attempts=attempts+1,updated_at=? WHERE id=? AND state='pending' AND attempts<? AND (not_before IS NULL OR not_before<=?)`,[owner,new Date(now.getTime()+ACTION_LEASE_MS).toISOString(),now.toISOString(),actionId,MAX_ACTION_ATTEMPTS,now.toISOString()]);
   if(!claimed.changes)return false;
   try{
@@ -79,7 +97,7 @@ async function executeAction(decision:Decision,actionId:string,owner:string,now:
       run("UPDATE tasks SET status='done',updated_at=? WHERE id=? AND status IN ('review','verification','testing')",[now.toISOString(),decision.taskId]);
       releaseReadyDependentTasks(decision.taskId);
     }else await deliverAuthorityAction(decision,actionId);
-    run("UPDATE completion_controller_actions SET state='completed',completed_at=?,claim_owner=NULL,claim_expires_at=NULL,updated_at=? WHERE id=? AND claim_owner=?",[now.toISOString(),now.toISOString(),actionId,owner]);
+    run("UPDATE completion_controller_actions SET state='completed',completed_at=?,delivered_at=CASE WHEN ? THEN ? ELSE delivered_at END,resolution_status=CASE WHEN ? THEN resolution_status WHEN ? THEN 'delivery_complete' ELSE resolution_status END,resolved_at=CASE WHEN ? THEN resolved_at WHEN ? THEN ? ELSE resolved_at END,claim_owner=NULL,claim_expires_at=NULL,updated_at=? WHERE id=? AND claim_owner=?",[now.toISOString(),external?1:0,now.toISOString(),requiresResolution?1:0,external?1:0,requiresResolution?1:0,external?1:0,now.toISOString(),now.toISOString(),actionId,owner]);
     run(`INSERT INTO task_activities(id,task_id,agent_id,activity_type,message,metadata,created_at) VALUES(?,?,NULL,'completion_action_delivered',?,?,?)`,[randomUUID(),decision.taskId,`Completion action delivered to ${decision.authority}`,JSON.stringify({controllerActionId:actionId,action:decision.action,authority:decision.authority}),now.toISOString()]);
     return true;
   }catch(error){
@@ -92,7 +110,7 @@ async function executeAction(decision:Decision,actionId:string,owner:string,now:
 async function drainOutbox(owner:string,now:Date){
   run("UPDATE completion_controller_actions SET state='pending',claim_owner=NULL,claim_expires_at=NULL WHERE state='executing' AND claim_expires_at<=?",[now.toISOString()]);
   const queued=queryAll<{id:string;payload:string}>("SELECT id,payload FROM completion_controller_actions WHERE state='pending' AND attempts<? AND (not_before IS NULL OR not_before<=?) ORDER BY created_at",[MAX_ACTION_ATTEMPTS,now.toISOString()]);
-  let errors=0;for(const item of queued){const ok=await executeAction(JSON.parse(item.payload) as Decision,item.id,owner,now);if(!ok)errors++;}return errors;
+  let errors=0;for(const item of queued){const decision=JSON.parse(item.payload) as Decision;if(actionRequiresResolution(decision.authority)&&hasUnresolvedAuthorityAction(decision.authority,item.id))continue;const ok=await executeAction(decision,item.id,owner,now);if(!ok)errors++;}return errors;
 }
 
 export async function runCompletionScan(mode:'dry_run'|'active'='dry_run',now=new Date()){
@@ -113,7 +131,7 @@ export async function runCompletionScan(mode:'dry_run'|'active'='dry_run',now=ne
   return{status:'completed' as const,scanId,mode,taskCount:tasks.length,decisions,summary};
 }
 
-export function getControllerQueue(){return queryAll(`SELECT a.*,t.title,t.status AS task_status FROM completion_controller_actions a JOIN tasks t ON t.id=a.task_id WHERE a.state IN ('proposed','pending','failed') ORDER BY CASE a.authority WHEN 'michael' THEN 0 WHEN 'oracle' THEN 1 WHEN 'tank' THEN 2 ELSE 3 END,a.created_at`)}
+export function getControllerQueue(){return queryAll(`SELECT a.*,t.title,t.status AS task_status FROM completion_controller_actions a JOIN tasks t ON t.id=a.task_id WHERE a.state IN ('proposed','pending','failed') OR (a.delivered_at IS NOT NULL AND a.resolution_status IS NULL) ORDER BY CASE WHEN a.delivered_at IS NOT NULL AND a.resolution_status IS NULL THEN 0 ELSE 1 END,CASE a.authority WHEN 'michael' THEN 0 WHEN 'oracle' THEN 1 WHEN 'tank' THEN 2 ELSE 3 END,a.created_at`)}
 
 let interval:NodeJS.Timeout|null=null;
 export function startCompletionController(){

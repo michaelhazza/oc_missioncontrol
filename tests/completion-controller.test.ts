@@ -5,7 +5,7 @@ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'mc-controller-'));process.env.DA
 let db:typeof import('../src/lib/db');let controller:typeof import('../src/lib/openclaw/completion-controller');let supervision:typeof import('../src/lib/openclaw/execution-supervision');
 const t0=new Date('2026-08-07T00:00:00.000Z');
 before(async()=>{db=await import('../src/lib/db');controller=await import('../src/lib/openclaw/completion-controller');supervision=await import('../src/lib/openclaw/execution-supervision');
-db.run("INSERT OR IGNORE INTO agents(id,name,role,gateway_agent_id) VALUES('worker','Worker','specialist','worker')");db.run("INSERT OR IGNORE INTO agents(id,name,role,gateway_agent_id) VALUES('reviewer','Reviewer','reviewer','reviewer')");
+db.run("INSERT OR IGNORE INTO agents(id,name,role,gateway_agent_id) VALUES('worker','Worker','specialist','worker')");db.run("INSERT OR IGNORE INTO agents(id,name,role,gateway_agent_id) VALUES('reviewer','Reviewer','reviewer','reviewer')");db.run("INSERT OR IGNORE INTO agents(id,name,role,gateway_agent_id) VALUES('oracle','Oracle','monitor','oracle')");
 });after(()=>{db.closeDb();fs.rmSync(dir,{recursive:true,force:true})});
 function add(id:string,status:string,agent:string|null='worker',reason:string|null=null){db.run('INSERT INTO tasks(id,title,status,assigned_agent_id,workspace_id,status_reason,updated_at) VALUES(?,?,?,?,?,?,?)',[id,id,status,agent,'default',reason,t0.toISOString()]);}
 
@@ -47,4 +47,40 @@ test('active scan promotes an identical dry-run action and drains it once',async
   assert.equal(db.queryOne<{status:string}>("SELECT status FROM tasks WHERE id='promote-close'")!.status,'done');
   assert.equal(db.queryOne<{id:string;state:string}>("SELECT id,state FROM completion_controller_actions WHERE id=?",[proposed.id])!.state,'completed');
   assert.equal(db.queryOne<{n:number}>("SELECT COUNT(*) AS n FROM completion_controller_actions WHERE task_id='promote-close' AND action_type='close'")!.n,1);
+});
+
+test('authority queue exposes only one unresolved delivery at a time',()=>{
+  add('oracle-one','review');add('oracle-two','review');
+  const now=t0.toISOString();
+  db.run(`INSERT INTO completion_controller_actions(id,task_id,action_key,action_type,authority,state,payload,created_at,updated_at,completed_at,delivered_at)
+    VALUES('oracle-action-one','oracle-one','oracle-one:key','oracle_review','oracle','completed','{}',?,?,?,?)`,[now,now,now,now]);
+  db.run(`INSERT INTO completion_controller_actions(id,task_id,action_key,action_type,authority,state,payload,created_at,updated_at)
+    VALUES('oracle-action-two','oracle-two','oracle-two:key','oracle_review','oracle','pending','{}',?,?)`,[now,now]);
+  assert.equal(controller.hasUnresolvedAuthorityAction('oracle'),true);
+  assert.equal(controller.hasUnresolvedAuthorityAction('oracle','oracle-action-one'),false);
+  const queue=controller.getControllerQueue() as {id:string}[];
+  assert.equal(queue[0].id,'oracle-action-one');
+  db.run("UPDATE completion_controller_actions SET resolution_status='passed',resolved_at=? WHERE id='oracle-action-one'",[now]);
+  assert.equal(controller.hasUnresolvedAuthorityAction('oracle'),false);
+});
+
+test('a later verification pass supersedes an earlier failure',()=>{
+  add('reverified','review');
+  db.run("INSERT INTO task_deliverables(id,task_id,deliverable_type,title) VALUES('reverified-d','reverified','file','evidence')");
+  db.run("INSERT INTO task_activities(id,task_id,agent_id,activity_type,message,created_at) VALUES('reverified-c','reverified','worker','completed','done',?)",[new Date(t0.getTime()+1_000).toISOString()]);
+  db.run("INSERT INTO task_activities(id,task_id,agent_id,activity_type,message,created_at) VALUES('reverified-f','reverified','reviewer','verification_failed','first review failed',?)",[new Date(t0.getTime()+2_000).toISOString()]);
+  db.run("INSERT INTO task_activities(id,task_id,agent_id,activity_type,message,created_at) VALUES('reverified-p','reverified','reviewer','verification_passed','rework passed',?)",[new Date(t0.getTime()+3_000).toISOString()]);
+  assert.equal(controller.classifyTask(db.queryOne<any>("SELECT id,title,status,brief,status_reason,assigned_agent_id,workflow_template_id,updated_at FROM tasks WHERE id='reverified'")!).classification,'ready_to_close');
+});
+
+test('authority session routing defaults to the gateway agent, not main',()=>{
+  assert.equal(controller.buildAuthoritySessionKey({name:'Oracle',session_key_prefix:null,gateway_agent_id:'oracle'},'mission-control-oracle'),'agent:oracle:mission-control-oracle');
+  assert.equal(controller.buildAuthoritySessionKey({name:'Oracle',session_key_prefix:'agent:custom:',gateway_agent_id:'oracle'},'review'),'agent:custom:review');
+});
+
+test('only Oracle review delivery waits on controller resolution',()=>{
+  assert.equal(controller.actionRequiresResolution('oracle'),true);
+  assert.equal(controller.actionRequiresResolution('specialist'),false);
+  assert.equal(controller.actionRequiresResolution('verifier'),false);
+  assert.equal(controller.actionRequiresResolution('michael'),false);
 });

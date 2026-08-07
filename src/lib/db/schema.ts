@@ -236,7 +236,8 @@ CREATE TABLE IF NOT EXISTS completion_controller_actions (
   state TEXT NOT NULL CHECK(state IN ('proposed','pending','executing','completed','failed','cancelled')),
   payload TEXT, attempts INTEGER NOT NULL DEFAULT 0, not_before TEXT,
   last_error TEXT, claim_owner TEXT, claim_expires_at TEXT,
-  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT,
+  delivered_at TEXT, resolution_status TEXT, resolved_at TEXT, resolution_note TEXT
 );
 CREATE TABLE IF NOT EXISTS completion_controller_lease (
   singleton INTEGER PRIMARY KEY CHECK(singleton=1), owner_id TEXT NOT NULL,

@@ -1099,6 +1099,18 @@ const migrations: Migration[] = [
       if(!columns.has('claim_expires_at'))db.exec('ALTER TABLE completion_controller_actions ADD COLUMN claim_expires_at TEXT');
       db.exec('CREATE INDEX IF NOT EXISTS idx_controller_actions_claim ON completion_controller_actions(state,not_before,claim_expires_at)');
     }
+  },
+  {
+    id: '034',
+    name: 'add_completion_action_resolution_lifecycle',
+    up: (db) => {
+      const columns = new Set((db.prepare('PRAGMA table_info(completion_controller_actions)').all() as {name:string}[]).map(c=>c.name));
+      if(!columns.has('delivered_at'))db.exec('ALTER TABLE completion_controller_actions ADD COLUMN delivered_at TEXT');
+      if(!columns.has('resolution_status'))db.exec('ALTER TABLE completion_controller_actions ADD COLUMN resolution_status TEXT');
+      if(!columns.has('resolved_at'))db.exec('ALTER TABLE completion_controller_actions ADD COLUMN resolved_at TEXT');
+      if(!columns.has('resolution_note'))db.exec('ALTER TABLE completion_controller_actions ADD COLUMN resolution_note TEXT');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_controller_actions_resolution ON completion_controller_actions(authority,resolution_status,delivered_at)');
+    }
   }
 ];
 
