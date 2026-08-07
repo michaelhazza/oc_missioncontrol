@@ -59,6 +59,8 @@ export const CreateTaskSchema = z.object({
   mattermost_source_post_id: z.string().max(128).optional(),
   mattermost_thread_url: z.string().url().max(2000).optional(),
   depends_on_task_ids: z.array(z.string().uuid()).max(50).optional(),
+}).superRefine((task,ctx)=>{
+  if(Boolean(task.mattermost_channel_id)!==Boolean(task.mattermost_root_post_id))ctx.addIssue({code:z.ZodIssueCode.custom,path:['mattermost_root_post_id'],message:'Mattermost task origin requires both channel and root post IDs'});
 });
 
 export const UpdateTaskSchema = z.object({

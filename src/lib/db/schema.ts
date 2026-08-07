@@ -244,6 +244,23 @@ CREATE TABLE IF NOT EXISTS completion_controller_lease (
   lease_expires_at TEXT NOT NULL, epoch INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL
 );
 
+-- Durable, fenced, thread-rooted semantic Mattermost updates. Heartbeats are
+-- deliberately excluded; only material task milestones enter this outbox.
+CREATE TABLE IF NOT EXISTS mattermost_task_update_outbox (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  action_key TEXT NOT NULL UNIQUE,
+  milestone TEXT NOT NULL,
+  channel_id TEXT NOT NULL,
+  root_post_id TEXT NOT NULL,
+  message TEXT NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('pending','delivering','delivered','failed','cancelled')),
+  attempts INTEGER NOT NULL DEFAULT 0,
+  not_before TEXT, claim_owner TEXT, claim_expires_at TEXT,
+  provider_message_id TEXT, last_error TEXT,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, delivered_at TEXT
+);
+
 -- Workflow templates (per-workspace workflow definitions)
 CREATE TABLE IF NOT EXISTS workflow_templates (
   id TEXT PRIMARY KEY,
@@ -336,6 +353,8 @@ CREATE INDEX IF NOT EXISTS idx_task_execution_events_task
   ON task_execution_events(task_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_controller_actions_queue ON completion_controller_actions(state,not_before,created_at);
 CREATE INDEX IF NOT EXISTS idx_controller_actions_claim ON completion_controller_actions(state,not_before,claim_expires_at);
+CREATE INDEX IF NOT EXISTS idx_mattermost_task_update_delivery ON mattermost_task_update_outbox(state,not_before,claim_expires_at,created_at);
+CREATE INDEX IF NOT EXISTS idx_mattermost_task_update_cooldown ON mattermost_task_update_outbox(task_id,milestone,created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_reconciliations_task ON task_reconciliations(task_id,created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_planning_questions_task ON planning_questions(task_id, sort_order);
 CREATE INDEX IF NOT EXISTS idx_workflow_templates_workspace ON workflow_templates(workspace_id);

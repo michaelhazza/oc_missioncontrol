@@ -4,7 +4,7 @@ import fs from'node:fs';import os from'node:os';import path from'node:path';
 const dir=fs.mkdtempSync(path.join(os.tmpdir(),'mc-controller-'));process.env.DATABASE_PATH=path.join(dir,'db.sqlite');process.env.OPENCLAW_WEBHOOK_SECRET='test';
 let db:typeof import('../src/lib/db');let controller:typeof import('../src/lib/openclaw/completion-controller');let supervision:typeof import('../src/lib/openclaw/execution-supervision');
 const t0=new Date('2026-08-07T00:00:00.000Z');
-before(async()=>{db=await import('../src/lib/db');controller=await import('../src/lib/openclaw/completion-controller');supervision=await import('../src/lib/openclaw/execution-supervision');
+before(async()=>{process.env.MISSION_CONTROL_COMPLETION_ACTIONS='dispatch,request_verification,close';db=await import('../src/lib/db');controller=await import('../src/lib/openclaw/completion-controller');supervision=await import('../src/lib/openclaw/execution-supervision');
 db.run("INSERT OR IGNORE INTO agents(id,name,role,gateway_agent_id) VALUES('worker','Worker','specialist','worker')");db.run("INSERT OR IGNORE INTO agents(id,name,role,gateway_agent_id) VALUES('reviewer','Reviewer','reviewer','reviewer')");db.run("INSERT OR IGNORE INTO agents(id,name,role,gateway_agent_id) VALUES('oracle','Oracle','monitor','oracle')");
 });after(()=>{db.closeDb();fs.rmSync(dir,{recursive:true,force:true})});
 function add(id:string,status:string,agent:string|null='worker',reason:string|null=null){db.run('INSERT INTO tasks(id,title,status,assigned_agent_id,workspace_id,status_reason,updated_at) VALUES(?,?,?,?,?,?,?)',[id,id,status,agent,'default',reason,t0.toISOString()]);}

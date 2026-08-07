@@ -3,11 +3,17 @@ import { queryAll, queryOne, run, transaction } from '@/lib/db';
 import { dispatchTaskToGateway } from './dispatch';
 import { getOpenClawClient } from './client';
 import { releaseReadyDependentTasks } from '@/lib/task-dependencies';
+import { drainMattermostOutbox,queueMattermostMilestone } from './mattermost-task-updates';
 
 export const CONTROLLER_INTERVAL_MS=90_000;
 const LEASE_MS=75_000;
 const MAX_ACTION_ATTEMPTS=2;
 const ACTION_LEASE_MS=60_000;
+
+function activeActionAllowlist(){
+  return new Set((process.env.MISSION_CONTROL_COMPLETION_ACTIONS||'dispatch,request_verification')
+    .split(',').map(value=>value.trim()).filter(Boolean));
+}
 
 export type CompletionClassification='healthy_running'|'awaiting_dependency'|'awaiting_agent'|'awaiting_verification'|'awaiting_human_authority'|'blocked'|'failed'|'stalled'|'abandoned'|'ready_to_close';
 type Authority='specialist'|'verifier'|'oracle'|'tank'|'michael'|'controller';
@@ -95,10 +101,16 @@ async function executeAction(decision:Decision,actionId:string,owner:string,now:
   try{
     if(decision.action==='dispatch'){
       const result=await dispatchTaskToGateway(decision.taskId); if(!result.success)throw new Error(result.error||'Dispatch failed');
+      queueMattermostMilestone(decision.taskId,'dispatched','The assigned specialist has been dispatched through the durable execution path.',`controller:${actionId}:dispatched`,now);
     }else if(decision.action==='close'){
       run("UPDATE tasks SET status='done',updated_at=? WHERE id=? AND status IN ('review','verification','testing')",[now.toISOString(),decision.taskId]);
       releaseReadyDependentTasks(decision.taskId);
-    }else await deliverAuthorityAction(decision,actionId);
+      queueMattermostMilestone(decision.taskId,'completed','Objective completion evidence passed and Mission Control closed the task. Deliverables remain attached to the task record.',`controller:${actionId}:completed`,now);
+    }else{
+      await deliverAuthorityAction(decision,actionId);
+      const milestone=decision.action==='request_verification'?'verification':decision.action==='return_rework'?'rework':decision.authority==='michael'?'decision':decision.classification==='blocked'?'blocked':decision.classification==='failed'?'failed':null;
+      if(milestone)queueMattermostMilestone(decision.taskId,milestone,'Mission Control recorded this material workflow transition. Further updates will be posted only when the state changes.',`controller:${actionId}:${milestone}`,now);
+    }
     run("UPDATE completion_controller_actions SET state='completed',completed_at=?,delivered_at=CASE WHEN ? THEN ? ELSE delivered_at END,resolution_status=CASE WHEN ? THEN resolution_status WHEN ? THEN 'delivery_complete' ELSE resolution_status END,resolved_at=CASE WHEN ? THEN resolved_at WHEN ? THEN ? ELSE resolved_at END,claim_owner=NULL,claim_expires_at=NULL,updated_at=? WHERE id=? AND claim_owner=?",[now.toISOString(),external?1:0,now.toISOString(),requiresResolution?1:0,external?1:0,requiresResolution?1:0,external?1:0,now.toISOString(),now.toISOString(),actionId,owner]);
     run(`INSERT INTO task_activities(id,task_id,agent_id,activity_type,message,metadata,created_at) VALUES(?,?,NULL,'completion_action_delivered',?,?,?)`,[randomUUID(),decision.taskId,`Completion action delivered to ${decision.authority}`,JSON.stringify({controllerActionId:actionId,action:decision.action,authority:decision.authority}),now.toISOString()]);
     return true;
@@ -115,7 +127,10 @@ async function executeAction(decision:Decision,actionId:string,owner:string,now:
 
 async function drainOutbox(owner:string,now:Date){
   run("UPDATE completion_controller_actions SET state='pending',claim_owner=NULL,claim_expires_at=NULL WHERE state='executing' AND claim_expires_at<=?",[now.toISOString()]);
-  const queued=queryAll<{id:string;payload:string}>("SELECT id,payload FROM completion_controller_actions WHERE state='pending' AND attempts<? AND (not_before IS NULL OR not_before<=?) ORDER BY created_at",[MAX_ACTION_ATTEMPTS,now.toISOString()]);
+  const allowed=Array.from(activeActionAllowlist());
+  if(allowed.length===0)return 0;
+  const placeholders=allowed.map(()=>'?').join(',');
+  const queued=queryAll<{id:string;payload:string}>(`SELECT id,payload FROM completion_controller_actions WHERE state='pending' AND action_type IN (${placeholders}) AND attempts<? AND (not_before IS NULL OR not_before<=?) ORDER BY created_at`,[...allowed,MAX_ACTION_ATTEMPTS,now.toISOString()]);
   let errors=0;for(const item of queued){const decision=JSON.parse(item.payload) as Decision;if(actionRequiresResolution(decision.authority)&&hasUnresolvedAuthorityAction(decision.authority,item.id))continue;const ok=await executeAction(decision,item.id,owner,now);if(!ok)errors++;}return errors;
 }
 
@@ -129,9 +144,14 @@ export async function runCompletionScan(mode:'dry_run'|'active'='dry_run',now=ne
     run(`INSERT INTO task_reconciliations(id,scan_id,task_id,classification,fingerprint,proposed_action,reason,evidence,created_at) VALUES(?,?,?,?,?,?,?,?,?)`,[randomUUID(),scanId,task.id,decision.classification,decision.fingerprint,decision.action||null,decision.reason,JSON.stringify(decision.evidence),now.toISOString()]);
     if(!decision.action)continue;
     const actionKey=`${task.id}:${decision.action}:${decision.fingerprint}`; const actionId=randomUUID();
-    run(`INSERT INTO completion_controller_actions(id,task_id,action_key,action_type,authority,state,payload,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(action_key) DO UPDATE SET state=CASE WHEN completion_controller_actions.state='proposed' AND excluded.state='pending' THEN 'pending' ELSE completion_controller_actions.state END,payload=excluded.payload,updated_at=excluded.updated_at`,[actionId,task.id,actionKey,decision.action,decision.authority,mode==='active'?'pending':'proposed',JSON.stringify(decision),now.toISOString(),now.toISOString()]);
+    const actionEnabled=mode==='active'&&activeActionAllowlist().has(decision.action);
+    run(`INSERT INTO completion_controller_actions(id,task_id,action_key,action_type,authority,state,payload,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(action_key) DO UPDATE SET state=CASE WHEN completion_controller_actions.state='proposed' AND excluded.state='pending' THEN 'pending' ELSE completion_controller_actions.state END,payload=excluded.payload,updated_at=excluded.updated_at`,[actionId,task.id,actionKey,decision.action,decision.authority,actionEnabled?'pending':'proposed',JSON.stringify(decision),now.toISOString(),now.toISOString()]);
   }
-  if(mode==='active')errors+=await drainOutbox(owner,now);
+  if(mode==='active'){
+    errors+=await drainOutbox(owner,now);
+    const messageResult=await drainMattermostOutbox(now);
+    errors+=messageResult.failed;
+  }
   const summary={byClassification:Object.fromEntries(Array.from(new Set(decisions.map(d=>d.classification))).map(key=>[key,decisions.filter(d=>d.classification===key).length])),actionable,errors};
   run('UPDATE completion_controller_scans SET completed_at=?,task_count=?,actionable_count=?,error_count=?,summary=? WHERE id=?',[new Date().toISOString(),tasks.length,actionable,errors,JSON.stringify(summary),scanId]);
   return{status:'completed' as const,scanId,mode,taskCount:tasks.length,decisions,summary};
