@@ -12,6 +12,7 @@ function add(id:string,status:string,agent:string|null='worker',reason:string|nu
 test('classifies complete lifecycle and produces idempotent dry-run actions',async()=>{
   add('healthy','assigned');supervision.startExecution({taskId:'healthy',agentId:'worker',sessionKey:'s',runIdentity:'healthy-run',leaseOwner:'o'},t0);
   add('missing','assigned');
+  add('parked','inbox');
   add('stalled','in_progress');db.run(`INSERT INTO task_execution_runs(id,task_id,agent_id,session_key,run_identity,state,lease_epoch,oracle_status,created_at,updated_at) VALUES('stalled-run','stalled','worker','s','stalled-identity','stalled',1,'pending',?,?)`,[t0.toISOString(),t0.toISOString()]);
   add('verify','review');db.run("INSERT INTO task_roles(id,task_id,role,agent_id) VALUES('role-v','verify','reviewer','reviewer')");
   add('close','review');db.run("INSERT INTO task_deliverables(id,task_id,deliverable_type,title) VALUES('d','close','file','evidence')");db.run("INSERT INTO task_activities(id,task_id,agent_id,activity_type,message) VALUES('a','close','worker','completed','done')");db.run("INSERT INTO task_activities(id,task_id,agent_id,activity_type,message) VALUES('a-verify','close','reviewer','verification_passed','gates passed')");
@@ -21,6 +22,7 @@ test('classifies complete lifecycle and produces idempotent dry-run actions',asy
   const first=await controller.runCompletionScan('dry_run',new Date(t0.getTime()+60_000));assert.equal(first.status,'completed');if(first.status!=='completed')return;
   const byId=Object.fromEntries(first.decisions.map(d=>[d.taskId,d]));
   assert.equal(byId.healthy.classification,'healthy_running');assert.equal(byId.missing.action,'dispatch');assert.equal(byId.stalled.classification,'stalled');
+  assert.equal(byId.parked.classification,'awaiting_agent');assert.equal(byId.parked.action,undefined);
   assert.equal(byId.verify.action,'request_verification');assert.equal(byId.close.action,'close');assert.equal(byId.dependent.classification,'awaiting_dependency');
   assert.equal(byId.human.authority,'michael');assert.equal(byId.blocked.authority,'oracle');
   const actionCount=db.queryOne<{n:number}>('SELECT COUNT(*) AS n FROM completion_controller_actions')!.n;
@@ -83,4 +85,10 @@ test('only Oracle review delivery waits on controller resolution',()=>{
   assert.equal(controller.actionRequiresResolution('specialist'),false);
   assert.equal(controller.actionRequiresResolution('verifier'),false);
   assert.equal(controller.actionRequiresResolution('michael'),false);
+});
+
+test('a dispatch invalidated by a concurrent state change is superseded',()=>{
+  const decision={taskId:'race',classification:'awaiting_agent',reason:'ready',action:'dispatch',authority:'controller',evidence:{},fingerprint:'race'} as const;
+  assert.equal(controller.isSupersededDispatchError(decision,'Task state inbox cannot execute'),true);
+  assert.equal(controller.isSupersededDispatchError(decision,'Gateway unavailable'),false);
 });

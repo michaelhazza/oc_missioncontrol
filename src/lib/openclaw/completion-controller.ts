@@ -20,6 +20,7 @@ export function buildAuthoritySessionKey(agent:{name:string;session_key_prefix:s
 }
 
 export function actionRequiresResolution(authority:Authority){return authority==='oracle'}
+export function isSupersededDispatchError(decision:Decision,message:string){return decision.action==='dispatch'&&/Task state .* cannot execute/i.test(message)}
 
 function stable(value:unknown){return createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0,24)}
 
@@ -49,7 +50,8 @@ export function classifyTask(task:TaskRow,now=new Date()):Decision{
   else if(execution?.state==='stalled'||(task.status==='in_progress'&&(!execution||!execution.lease_expires_at||Date.parse(execution.lease_expires_at)<=now.getTime()))){classification='stalled';reason='Execution supervision owns stale-run recovery';authority='oracle';}
   else if(task.status==='in_progress'&&execution&&execution.lease_expires_at&&Date.parse(execution.lease_expires_at)>now.getTime()){classification='healthy_running';reason='Valid fenced execution lease; no controller action';authority='specialist';}
   else if(task.status==='assigned'&&!execution){classification='awaiting_agent';reason='Assigned task has not been dispatched through durable execution';action='dispatch';authority='controller';}
-  else if(task.status==='pending_dispatch'||task.status==='inbox'){classification='awaiting_agent';reason='Task is ready for assignment or dispatch';action=task.assigned_agent_id?'dispatch':'oracle_assignment';authority=task.assigned_agent_id?'controller':'oracle';}
+  else if(task.status==='pending_dispatch'){classification='awaiting_agent';reason='Task is ready for assignment or dispatch';action=task.assigned_agent_id?'dispatch':'oracle_assignment';authority=task.assigned_agent_id?'controller':'oracle';}
+  else if(task.status==='inbox'){classification='awaiting_agent';reason='Inbox task requires explicit release before dispatch';authority='oracle';}
   else if(task.status==='blocked'&&/michael|approval|authority|spend|production/i.test(task.status_reason||task.brief||'')){classification='awaiting_human_authority';reason='Explicit Michael-only authority gate';action='escalate_michael';authority='michael';}
   else if(task.status==='blocked'){classification='blocked';reason=task.status_reason||'Task is intentionally blocked';action='oracle_review';authority='oracle';}
   else if(['testing','verification','review'].includes(task.status)&&latestVerification?.activity_type==='verification_failed'){classification='failed';reason=`Verification failed: ${latestVerification.message}`;action='return_rework';authority='specialist';}
@@ -102,6 +104,10 @@ async function executeAction(decision:Decision,actionId:string,owner:string,now:
     return true;
   }catch(error){
     const message=error instanceof Error?error.message:String(error);
+    if(isSupersededDispatchError(decision,message)){
+      run("UPDATE completion_controller_actions SET state='cancelled',resolution_status='superseded_state',resolution_note=?,resolved_at=?,last_error=NULL,claim_owner=NULL,claim_expires_at=NULL,updated_at=? WHERE id=? AND claim_owner=?",[message,now.toISOString(),now.toISOString(),actionId,owner]);
+      return true;
+    }
     run(`UPDATE completion_controller_actions SET state=CASE WHEN attempts>=? THEN 'failed' ELSE 'pending' END,last_error=?,not_before=?,claim_owner=NULL,claim_expires_at=NULL,updated_at=? WHERE id=? AND claim_owner=?`,[MAX_ACTION_ATTEMPTS,message,new Date(now.getTime()+60_000).toISOString(),now.toISOString(),actionId,owner]);
     return false;
   }
