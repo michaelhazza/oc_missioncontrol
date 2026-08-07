@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "next dev -p 4000",
     "build": "next build",
+    "test:execution": "tsx --test tests/*.test.ts",
     "prestart": "node scripts/verify-native-deps.js --repair",
     "start": "next start -p 3000 -H 0.0.0.0",
     "native:check": "node scripts/verify-native-deps.js",

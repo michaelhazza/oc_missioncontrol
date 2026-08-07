@@ -919,6 +919,186 @@ const migrations: Migration[] = [
 
       console.log('[Migration 027] Agent dispatch schema reconciled');
     }
+  },
+  {
+    id: '028',
+    name: 'add_task_dependencies',
+    up: (db) => {
+      console.log('[Migration 028] Adding task dependencies...');
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS task_dependencies (
+          task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+          depends_on_task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+          created_at TEXT DEFAULT (datetime('now')),
+          PRIMARY KEY (task_id, depends_on_task_id),
+          CHECK (task_id != depends_on_task_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_task_dependencies_prerequisite
+          ON task_dependencies(depends_on_task_id);
+      `);
+      console.log('[Migration 028] Task dependencies added');
+    }
+  },
+  {
+    id: '029',
+    name: 'add_single_specialist_default_workflow',
+    up: (db) => {
+      console.log('[Migration 029] Adding single-specialist default workflow...');
+      const now = new Date().toISOString();
+      const stages = JSON.stringify([
+        { id: 'work', label: 'Work', role: 'specialist', status: 'in_progress' },
+        { id: 'done', label: 'Done', role: null, status: 'done' },
+      ]);
+
+      db.prepare(`
+        INSERT INTO workflow_templates
+          (id, workspace_id, name, description, stages, fail_targets, is_default, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          name = excluded.name,
+          description = excluded.description,
+          stages = excluded.stages,
+          fail_targets = excluded.fail_targets,
+          updated_at = excluded.updated_at
+      `).run(
+        'tpl-single-specialist',
+        'default',
+        'Single Specialist',
+        'One assigned specialist completes the task directly. Use Strict only when independent build/test/review roles are explicitly assigned.',
+        stages,
+        '{}',
+        now,
+        now,
+      );
+
+      db.prepare('UPDATE workflow_templates SET is_default = 0 WHERE workspace_id = ?')
+        .run('default');
+      db.prepare('UPDATE workflow_templates SET is_default = 1 WHERE id = ?')
+        .run('tpl-single-specialist');
+      console.log('[Migration 029] Single Specialist is now the default workflow');
+    }
+  },
+  {
+    id: '030',
+    name: 'add_durable_execution_supervision',
+    up: (db) => {
+      console.log('[Migration 030] Adding durable execution supervision...');
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS task_execution_runs (
+          id TEXT PRIMARY KEY,
+          task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+          agent_id TEXT NOT NULL REFERENCES agents(id),
+          session_key TEXT NOT NULL,
+          run_identity TEXT NOT NULL,
+          state TEXT NOT NULL DEFAULT 'running'
+            CHECK (state IN ('running','waiting_input','blocked','stalled','recovering','failed','cancelled','complete')),
+          lease_owner TEXT,
+          lease_epoch INTEGER NOT NULL DEFAULT 0,
+          lease_expires_at TEXT,
+          heartbeat_at TEXT,
+          checkpoint TEXT,
+          checkpoint_at TEXT,
+          resume_count INTEGER NOT NULL DEFAULT 0,
+          retry_count INTEGER NOT NULL DEFAULT 0,
+          recovery_not_before TEXT,
+          last_failure_code TEXT,
+          last_failure_detail TEXT,
+          oracle_status TEXT NOT NULL DEFAULT 'none'
+            CHECK (oracle_status IN ('none','pending','acknowledged','resolved')),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          terminal_at TEXT,
+          UNIQUE(task_id, run_identity)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_task_execution_one_live
+          ON task_execution_runs(task_id)
+          WHERE state IN ('running','waiting_input','blocked','stalled','recovering');
+        CREATE INDEX IF NOT EXISTS idx_task_execution_reconcile
+          ON task_execution_runs(state, lease_expires_at, heartbeat_at);
+
+        CREATE TABLE IF NOT EXISTS task_execution_events (
+          id TEXT PRIMARY KEY,
+          run_id TEXT NOT NULL REFERENCES task_execution_runs(id) ON DELETE CASCADE,
+          task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+          event_key TEXT NOT NULL,
+          event_type TEXT NOT NULL,
+          lease_epoch INTEGER,
+          payload TEXT,
+          created_at TEXT NOT NULL,
+          UNIQUE(run_id, event_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_task_execution_events_task
+          ON task_execution_events(task_id, created_at DESC);
+      `);
+      console.log('[Migration 030] Durable execution supervision added');
+    }
+  },
+  {
+    id: '031',
+    name: 'add_oracle_completion_controller',
+    up: (db) => {
+      console.log('[Migration 031] Adding Oracle completion controller...');
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS completion_controller_scans (
+          id TEXT PRIMARY KEY, mode TEXT NOT NULL CHECK(mode IN ('dry_run','active')),
+          owner_id TEXT NOT NULL, started_at TEXT NOT NULL, completed_at TEXT,
+          task_count INTEGER NOT NULL DEFAULT 0, actionable_count INTEGER NOT NULL DEFAULT 0,
+          error_count INTEGER NOT NULL DEFAULT 0, summary TEXT
+        );
+        CREATE TABLE IF NOT EXISTS task_reconciliations (
+          id TEXT PRIMARY KEY, scan_id TEXT NOT NULL REFERENCES completion_controller_scans(id) ON DELETE CASCADE,
+          task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, classification TEXT NOT NULL,
+          fingerprint TEXT NOT NULL, proposed_action TEXT, reason TEXT NOT NULL, evidence TEXT,
+          created_at TEXT NOT NULL, UNIQUE(scan_id,task_id)
+        );
+        CREATE TABLE IF NOT EXISTS completion_controller_actions (
+          id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+          action_key TEXT NOT NULL UNIQUE, action_type TEXT NOT NULL, authority TEXT NOT NULL,
+          state TEXT NOT NULL CHECK(state IN ('proposed','pending','executing','completed','failed','cancelled')),
+          payload TEXT, attempts INTEGER NOT NULL DEFAULT 0, not_before TEXT,
+          last_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS completion_controller_lease (
+          singleton INTEGER PRIMARY KEY CHECK(singleton=1), owner_id TEXT NOT NULL,
+          lease_expires_at TEXT NOT NULL, epoch INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_controller_actions_queue ON completion_controller_actions(state,not_before,created_at);
+        CREATE INDEX IF NOT EXISTS idx_reconciliations_task ON task_reconciliations(task_id,created_at DESC);
+      `);
+      console.log('[Migration 031] Oracle completion controller added');
+    }
+  },
+  {
+    id: '032',
+    name: 'add_mattermost_thread_identity_to_tasks',
+    up: (db) => {
+      console.log('[Migration 032] Adding Mattermost thread identity to tasks...');
+      const columns = db.prepare('PRAGMA table_info(tasks)').all() as { name: string }[];
+      const existing = new Set(columns.map(column => column.name));
+      for (const column of [
+        'mattermost_channel_id',
+        'mattermost_root_post_id',
+        'mattermost_source_post_id',
+        'mattermost_thread_url',
+      ]) {
+        if (!existing.has(column)) db.exec(`ALTER TABLE tasks ADD COLUMN ${column} TEXT`);
+      }
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_tasks_mattermost_root
+          ON tasks(mattermost_channel_id, mattermost_root_post_id);
+      `);
+      console.log('[Migration 032] Mattermost thread identity added');
+    }
+  }
+  ,{
+    id: '033',
+    name: 'fence_completion_controller_outbox',
+    up: (db) => {
+      const columns = new Set((db.prepare('PRAGMA table_info(completion_controller_actions)').all() as {name:string}[]).map(c=>c.name));
+      if(!columns.has('claim_owner'))db.exec('ALTER TABLE completion_controller_actions ADD COLUMN claim_owner TEXT');
+      if(!columns.has('claim_expires_at'))db.exec('ALTER TABLE completion_controller_actions ADD COLUMN claim_expires_at TEXT');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_controller_actions_claim ON completion_controller_actions(state,not_before,claim_expires_at)');
+    }
   }
 ];
 

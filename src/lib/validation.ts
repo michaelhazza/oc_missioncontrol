@@ -44,11 +44,17 @@ export const CreateTaskSchema = z.object({
   created_by_agent_id: z.string().uuid().optional().nullable(),
   business_id: z.string().optional(),
   workspace_id: z.string().optional(),
+  workflow_template_id: z.string().optional().nullable(),
   due_date: z.string().optional().nullable(),
   brief: z.string().max(50000, 'Brief must be 50000 characters or less').optional(),
   trigger_type: TriggerType.optional(),
   trigger_source: z.string().optional(),
   cron_job_id: z.string().optional(),
+  mattermost_channel_id: z.string().max(128).optional(),
+  mattermost_root_post_id: z.string().max(128).optional(),
+  mattermost_source_post_id: z.string().max(128).optional(),
+  mattermost_thread_url: z.string().url().max(2000).optional(),
+  depends_on_task_ids: z.array(z.string().uuid()).max(50).optional(),
 });
 
 export const UpdateTaskSchema = z.object({
@@ -61,6 +67,10 @@ export const UpdateTaskSchema = z.object({
   due_date: z.string().optional().nullable(),
   updated_by_agent_id: z.string().uuid().optional(),
   brief: z.string().max(50000, 'Brief must be 50000 characters or less').optional(),
+  mattermost_channel_id: z.string().max(128).optional().nullable(),
+  mattermost_root_post_id: z.string().max(128).optional().nullable(),
+  mattermost_source_post_id: z.string().max(128).optional().nullable(),
+  mattermost_thread_url: z.string().url().max(2000).optional().nullable(),
 });
 
 // Activity validation schema

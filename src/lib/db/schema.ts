@@ -72,8 +72,22 @@ CREATE TABLE IF NOT EXISTS tasks (
   trigger_type TEXT DEFAULT 'manual' CHECK (trigger_type IN ('manual', 'cron', 'agent', 'webhook')),
   trigger_source TEXT,
   cron_job_id TEXT,
+  mattermost_channel_id TEXT,
+  mattermost_root_post_id TEXT,
+  mattermost_source_post_id TEXT,
+  mattermost_thread_url TEXT,
   created_at TEXT DEFAULT (datetime('now')),
   updated_at TEXT DEFAULT (datetime('now'))
+);
+
+-- Task dependency graph. A task remains pending_dispatch until every
+-- prerequisite task has reached done.
+CREATE TABLE IF NOT EXISTS task_dependencies (
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  depends_on_task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  created_at TEXT DEFAULT (datetime('now')),
+  PRIMARY KEY (task_id, depends_on_task_id),
+  CHECK (task_id != depends_on_task_id)
 );
 
 -- Planning questions table
@@ -162,6 +176,73 @@ CREATE TABLE IF NOT EXISTS openclaw_sessions (
   updated_at TEXT DEFAULT (datetime('now'))
 );
 
+-- Durable ownership and recovery state for agent task executions. Mission
+-- Control remains authoritative; a task marked in_progress is healthy only
+-- while its live run owns a recent renewable lease.
+CREATE TABLE IF NOT EXISTS task_execution_runs (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  agent_id TEXT NOT NULL REFERENCES agents(id),
+  session_key TEXT NOT NULL,
+  run_identity TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'running'
+    CHECK (state IN ('running','waiting_input','blocked','stalled','recovering','failed','cancelled','complete')),
+  lease_owner TEXT,
+  lease_epoch INTEGER NOT NULL DEFAULT 0,
+  lease_expires_at TEXT,
+  heartbeat_at TEXT,
+  checkpoint TEXT,
+  checkpoint_at TEXT,
+  resume_count INTEGER NOT NULL DEFAULT 0,
+  retry_count INTEGER NOT NULL DEFAULT 0,
+  recovery_not_before TEXT,
+  last_failure_code TEXT,
+  last_failure_detail TEXT,
+  oracle_status TEXT NOT NULL DEFAULT 'none'
+    CHECK (oracle_status IN ('none','pending','acknowledged','resolved')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  terminal_at TEXT,
+  UNIQUE(task_id, run_identity)
+);
+
+CREATE TABLE IF NOT EXISTS task_execution_events (
+  id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL REFERENCES task_execution_runs(id) ON DELETE CASCADE,
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  event_key TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  lease_epoch INTEGER,
+  payload TEXT,
+  created_at TEXT NOT NULL,
+  UNIQUE(run_id, event_key)
+);
+
+CREATE TABLE IF NOT EXISTS completion_controller_scans (
+  id TEXT PRIMARY KEY, mode TEXT NOT NULL CHECK(mode IN ('dry_run','active')),
+  owner_id TEXT NOT NULL, started_at TEXT NOT NULL, completed_at TEXT,
+  task_count INTEGER NOT NULL DEFAULT 0, actionable_count INTEGER NOT NULL DEFAULT 0,
+  error_count INTEGER NOT NULL DEFAULT 0, summary TEXT
+);
+CREATE TABLE IF NOT EXISTS task_reconciliations (
+  id TEXT PRIMARY KEY, scan_id TEXT NOT NULL REFERENCES completion_controller_scans(id) ON DELETE CASCADE,
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE, classification TEXT NOT NULL,
+  fingerprint TEXT NOT NULL, proposed_action TEXT, reason TEXT NOT NULL, evidence TEXT,
+  created_at TEXT NOT NULL, UNIQUE(scan_id,task_id)
+);
+CREATE TABLE IF NOT EXISTS completion_controller_actions (
+  id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  action_key TEXT NOT NULL UNIQUE, action_type TEXT NOT NULL, authority TEXT NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('proposed','pending','executing','completed','failed','cancelled')),
+  payload TEXT, attempts INTEGER NOT NULL DEFAULT 0, not_before TEXT,
+  last_error TEXT, claim_owner TEXT, claim_expires_at TEXT,
+  created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT
+);
+CREATE TABLE IF NOT EXISTS completion_controller_lease (
+  singleton INTEGER PRIMARY KEY CHECK(singleton=1), owner_id TEXT NOT NULL,
+  lease_expires_at TEXT NOT NULL, epoch INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL
+);
+
 -- Workflow templates (per-workspace workflow definitions)
 CREATE TABLE IF NOT EXISTS workflow_templates (
   id TEXT PRIMARY KEY,
@@ -238,6 +319,7 @@ CREATE TABLE IF NOT EXISTS workspace_settings (
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_assigned ON tasks(assigned_agent_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_workspace ON tasks(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_task_dependencies_prerequisite ON task_dependencies(depends_on_task_id);
 CREATE INDEX IF NOT EXISTS idx_agents_workspace ON agents(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at DESC);
@@ -245,6 +327,15 @@ CREATE INDEX IF NOT EXISTS idx_agents_status ON agents(status);
 CREATE INDEX IF NOT EXISTS idx_activities_task ON task_activities(task_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_deliverables_task ON task_deliverables(task_id);
 CREATE INDEX IF NOT EXISTS idx_openclaw_sessions_task ON openclaw_sessions(task_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_task_execution_one_live ON task_execution_runs(task_id)
+  WHERE state IN ('running','waiting_input','blocked','stalled','recovering');
+CREATE INDEX IF NOT EXISTS idx_task_execution_reconcile
+  ON task_execution_runs(state, lease_expires_at, heartbeat_at);
+CREATE INDEX IF NOT EXISTS idx_task_execution_events_task
+  ON task_execution_events(task_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_controller_actions_queue ON completion_controller_actions(state,not_before,created_at);
+CREATE INDEX IF NOT EXISTS idx_controller_actions_claim ON completion_controller_actions(state,not_before,claim_expires_at);
+CREATE INDEX IF NOT EXISTS idx_reconciliations_task ON task_reconciliations(task_id,created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_planning_questions_task ON planning_questions(task_id, sort_order);
 CREATE INDEX IF NOT EXISTS idx_workflow_templates_workspace ON workflow_templates(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_task_roles_task ON task_roles(task_id);

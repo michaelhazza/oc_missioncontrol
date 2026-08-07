@@ -5,6 +5,7 @@ import { broadcast } from '@/lib/events';
 import { getMissionControlUrl } from '@/lib/config';
 import { handleStageTransition, handleStageFailure, getTaskWorkflow, drainQueue, populateTaskRolesFromAgents } from '@/lib/workflow-engine';
 import { notifyLearner } from '@/lib/learner';
+import { releaseReadyDependentTasks } from '@/lib/task-dependencies';
 import { UpdateTaskSchema } from '@/lib/validation';
 import type { Task, UpdateTaskRequest, Agent, TaskDeliverable } from '@/lib/types';
 
@@ -111,6 +112,17 @@ export async function PATCH(
     if (validatedData.brief !== undefined) {
       updates.push('brief = ?');
       values.push(validatedData.brief);
+    }
+    for (const field of [
+      'mattermost_channel_id',
+      'mattermost_root_post_id',
+      'mattermost_source_post_id',
+      'mattermost_thread_url',
+    ] as const) {
+      if (validatedData[field] !== undefined) {
+        updates.push(`${field} = ?`);
+        values.push(validatedData[field]);
+      }
     }
 
     // Track if we need to dispatch task
@@ -357,6 +369,40 @@ export async function PATCH(
       drainQueue(id, existing.workspace_id).catch(err =>
         console.error('[Workflow] drainQueue after done failed:', err)
       );
+
+      const releasedTasks = releaseReadyDependentTasks(id);
+      if (releasedTasks.length > 0) {
+        const missionControlUrl = getMissionControlUrl();
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (process.env.MC_API_TOKEN) {
+          headers.Authorization = `Bearer ${process.env.MC_API_TOKEN}`;
+        }
+
+        for (const releasedTask of releasedTasks) {
+          try {
+            const dispatchRes = await fetch(
+              `${missionControlUrl}/api/tasks/${releasedTask.id}/dispatch`,
+              { method: 'POST', headers }
+            );
+            if (!dispatchRes.ok) {
+              const errorText = await dispatchRes.text();
+              const dispatchError = `Dependency release dispatch failed (${dispatchRes.status}): ${errorText}`;
+              run(
+                'UPDATE tasks SET planning_dispatch_error = ?, updated_at = ? WHERE id = ?',
+                [dispatchError, new Date().toISOString(), releasedTask.id]
+              );
+              console.error(`[Dependencies] ${dispatchError}`);
+            }
+          } catch (err) {
+            const dispatchError = `Dependency release dispatch error: ${(err as Error).message}`;
+            run(
+              'UPDATE tasks SET planning_dispatch_error = ?, updated_at = ? WHERE id = ?',
+              [dispatchError, new Date().toISOString(), releasedTask.id]
+            );
+            console.error(`[Dependencies] ${dispatchError}`);
+          }
+        }
+      }
     }
 
     return NextResponse.json(task);

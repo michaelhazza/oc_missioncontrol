@@ -1,149 +1,56 @@
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
-import { v4 as uuidv4 } from 'uuid';
-import { getDb, queryOne, run } from '@/lib/db';
 import { getOpenClawClient } from './client';
-import type { Task } from '@/lib/types';
+import { markRecoveryDelivered, markRecoveryDeliveryFailed, reconcileExecutions, RECONCILE_INTERVAL_MS, type RecoveryAction } from './execution-supervision';
+import { queryOne } from '@/lib/db';
 
-const INTERVAL_MS = 30 * 60 * 1000;
-const ACTIVE_WINDOW_MS = 5 * 60 * 1000;
-const LEASE_MS = 25 * 60 * 1000;
-const WATCHDOG_AGENT_ID = process.env.MISSION_CONTROL_WATCHDOG_AGENT_ID || 'tank';
+let watchdogInterval:NodeJS.Timeout|null=null;
 
-let watchdogInterval: NodeJS.Timeout | null = null;
-
-interface WatchdogTask extends Task {
-  agent_name: string;
-  gateway_agent_id: string;
-  session_key_prefix: string | null;
-}
-
-function hasRecentAgentActivity(gatewayAgentId: string, nowMs = Date.now()): boolean {
-  const sessionsDir = path.join(os.homedir(), '.openclaw', 'agents', gatewayAgentId, 'sessions');
-  try {
-    return fs.readdirSync(sessionsDir)
-      .filter(file => file.endsWith('.jsonl'))
-      .some(file => nowMs - fs.statSync(path.join(sessionsDir, file)).mtimeMs <= ACTIVE_WINDOW_MS);
-  } catch {
-    return false;
-  }
-}
-
-function ensureLeaseTable(): void {
-  getDb().exec(`
-    CREATE TABLE IF NOT EXISTS task_watchdog_leases (
-      task_id TEXT PRIMARY KEY,
-      owner_id TEXT NOT NULL,
-      lease_expires_at TEXT NOT NULL,
-      epoch INTEGER NOT NULL DEFAULT 1,
-      updated_at TEXT NOT NULL,
-      FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
-    );
-  `);
-}
-
-function acquireLease(taskId: string, ownerId: string, now: Date): boolean {
-  const expiresAt = new Date(now.getTime() + LEASE_MS).toISOString();
-  return getDb().transaction(() => {
-    const existing = queryOne<{ owner_id: string; lease_expires_at: string }>(
-      'SELECT owner_id, lease_expires_at FROM task_watchdog_leases WHERE task_id = ?',
-      [taskId],
-    );
-    if (existing && Date.parse(existing.lease_expires_at) > now.getTime()) return false;
-
-    run(
-      `INSERT INTO task_watchdog_leases (task_id, owner_id, lease_expires_at, epoch, updated_at)
-       VALUES (?, ?, ?, 1, ?)
-       ON CONFLICT(task_id) DO UPDATE SET
-         owner_id = excluded.owner_id,
-         lease_expires_at = excluded.lease_expires_at,
-         epoch = task_watchdog_leases.epoch + 1,
-         updated_at = excluded.updated_at
-       WHERE task_watchdog_leases.lease_expires_at <= excluded.updated_at`,
-      [taskId, ownerId, expiresAt, now.toISOString()],
-    );
-    const claimed = queryOne<{ owner_id: string }>(
-      'SELECT owner_id FROM task_watchdog_leases WHERE task_id = ?',
-      [taskId],
-    );
-    return claimed?.owner_id === ownerId;
-  })();
-}
-
-function releaseLease(taskId: string, ownerId: string): void {
-  run('DELETE FROM task_watchdog_leases WHERE task_id = ? AND owner_id = ?', [taskId, ownerId]);
-}
-
-export async function runTaskWatchdogCheck(now = new Date()): Promise<'no-task' | 'active' | 'leased' | 'resumed' | 'unavailable'> {
-  ensureLeaseTable();
-
-  const task = queryOne<WatchdogTask>(
-    `SELECT t.*, a.name AS agent_name, a.gateway_agent_id, a.session_key_prefix
-     FROM tasks t
-     JOIN agents a ON a.id = t.assigned_agent_id
-     WHERE a.gateway_agent_id = ? AND t.status IN ('in_progress', 'assigned')
-     ORDER BY CASE WHEN t.status = 'in_progress' THEN 0 ELSE 1 END,
-              COALESCE(t.updated_at, t.created_at) ASC
-     LIMIT 1`,
-    [WATCHDOG_AGENT_ID],
-  );
-  if (!task) return 'no-task';
-  if (hasRecentAgentActivity(task.gateway_agent_id, now.getTime())) return 'active';
-
-  const ownerId = uuidv4();
-  if (!acquireLease(task.id, ownerId, now)) return 'leased';
-
-  const client = getOpenClawClient();
-  if (!client.isConnected()) {
-    try {
-      await client.connect();
-    } catch {
-      releaseLease(task.id, ownerId);
-      return 'unavailable';
-    }
-  }
-
-  const mcUrl = (process.env.MISSION_CONTROL_URL || 'http://localhost:3000').replace(/\/$/, '');
-  const sessionKey = `${task.session_key_prefix || `agent:${task.gateway_agent_id}:`}mission-control-watchdog`;
-  try {
-    await client.call('chat.send', {
-      sessionKey,
-      idempotencyKey: `watchdog-${task.id}-${ownerId}`,
-      message: `Mission Control recovery check: resume your assigned in-progress task \"${task.title}\" (${task.id}). Fetch the current task record at ${mcUrl}/api/tasks/${task.id}, inspect existing artifacts and activity, and continue from the last verified checkpoint. Do not restart completed work. If another live execution already owns this task, exit without doing work. Log meaningful progress to Mission Control and only move to review when all acceptance criteria, tests, deliverables, and the completion summary are present.`,
+async function deliver(action:RecoveryAction):Promise<void>{
+  const client=getOpenClawClient();
+  if(!client.isConnected()) await client.connect();
+  if(action.kind==='resume'){
+    await client.call('chat.send',{
+      sessionKey:action.run.session_key,
+      idempotencyKey:action.recoveryKey,
+      message:`Mission Control durable recovery: continue task ${action.run.task_id} from its last persisted checkpoint. Recovery lease epoch ${action.run.lease_epoch} is authoritative. Do not restart completed work or create a second worker. POST heartbeats with this lease owner/epoch every 1–2 minutes, and finish only with an explicit terminal transition.`,
     });
-  } catch (err) {
-    releaseLease(task.id, ownerId);
-    throw err;
+    return;
   }
-
-  run(
-    `INSERT INTO events (id, type, agent_id, task_id, message, metadata, created_at)
-     VALUES (?, ?, (SELECT id FROM agents WHERE gateway_agent_id = ? LIMIT 1), ?, ?, ?, ?)`,
-    [
-      uuidv4(),
-      'task_watchdog_resumed',
-      task.gateway_agent_id,
-      task.id,
-      `30-minute watchdog resumed stale task \"${task.title}\" for ${task.agent_name}`,
-      JSON.stringify({ ownerId, sessionKey }),
-      now.toISOString(),
-    ],
-  );
-  return 'resumed';
+  const oracle=queryOne<{session_key_prefix:string|null;gateway_agent_id:string}>('SELECT session_key_prefix,gateway_agent_id FROM agents WHERE lower(name)=? LIMIT 1',['oracle']);
+  if(!oracle) throw new Error('Oracle agent is not registered');
+  const sessionKey=`${oracle.session_key_prefix||`agent:${oracle.gateway_agent_id}:`}mission-control-recovery`;
+  await client.call('chat.send',{
+    sessionKey,
+    idempotencyKey:action.recoveryKey,
+    message:`Oracle recovery escalation: task ${action.run.task_id}, execution ${action.run.id}, is stalled after bounded automatic recovery. Inspect Mission Control evidence, acknowledge the incident, and either reassign through the execution recovery API or leave it stalled with a specific diagnosis. Do not create an untracked worker.`,
+  });
 }
 
-export function startTaskWatchdog(): void {
-  if (watchdogInterval || process.env.MISSION_CONTROL_TASK_WATCHDOG === 'disabled') return;
-  ensureLeaseTable();
-  console.log(`[TaskWatchdog] Checking ${WATCHDOG_AGENT_ID} every 30 minutes`);
-  void runTaskWatchdogCheck().catch(err => console.error('[TaskWatchdog] Initial check failed:', err));
-  watchdogInterval = setInterval(() => {
-    void runTaskWatchdogCheck().catch(err => console.error('[TaskWatchdog] Check failed:', err));
-  }, INTERVAL_MS);
+export async function runTaskWatchdogCheck(now=new Date()):Promise<'no-task'|'active'|'resumed'|'escalated'|'partial'> {
+  const actions=reconcileExecutions(now);
+  if(actions.length===0)return 'no-task';
+  let resumed=0,escalated=0,failed=0;
+  for(const action of actions){
+    try{
+      await deliver(action);
+      markRecoveryDelivered(action);
+      if(action.kind==='resume') resumed++;
+      else escalated++;
+    }
+    catch(error){failed++;markRecoveryDeliveryFailed(action,error);console.error(`[ExecutionSupervisor] ${action.kind} delivery failed for ${action.run.task_id}:`,error);}
+  }
+  if(failed)return 'partial';
+  if(escalated)return 'escalated';
+  return resumed?'resumed':'active';
 }
 
-export function stopTaskWatchdog(): void {
-  if (watchdogInterval) clearInterval(watchdogInterval);
-  watchdogInterval = null;
+export function startTaskWatchdog():void{
+  if(watchdogInterval||process.env.MISSION_CONTROL_TASK_WATCHDOG==='disabled')return;
+  console.log(`[ExecutionSupervisor] One-minute reconciliation backstop enabled; leases/heartbeats remain primary`);
+  void runTaskWatchdogCheck().catch(error=>console.error('[ExecutionSupervisor] Initial reconciliation failed:',error));
+  watchdogInterval=setInterval(()=>void runTaskWatchdogCheck().catch(error=>console.error('[ExecutionSupervisor] Reconciliation failed:',error)),RECONCILE_INTERVAL_MS);
+}
+
+export function stopTaskWatchdog():void{
+  if(watchdogInterval)clearInterval(watchdogInterval);
+  watchdogInterval=null;
 }

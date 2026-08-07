@@ -16,12 +16,20 @@ import { v4 as uuidv4 } from 'uuid';
 import { queryOne, run } from '@/lib/db';
 import { getOpenClawClient } from '@/lib/openclaw/client';
 import { broadcast } from '@/lib/events';
+import { abandonDispatchExecution, startExecution, type ExecutionRun } from '@/lib/openclaw/execution-supervision';
 import type { Task, Agent, OpenClawSession } from '@/lib/types';
 
 export interface DispatchResult {
   success: boolean;
   correlationId: string;
   error?: string;
+}
+
+export function buildMattermostThreadInstruction(task: Task): string {
+  if (!task.mattermost_root_post_id) return '';
+  const destination = task.mattermost_thread_url ||
+    `Mattermost channel ${task.mattermost_channel_id || '(current channel)'}, root post ${task.mattermost_root_post_id}`;
+  return `\n**Originating Mattermost thread:** ${destination}\n**Reply requirement:** Post every user-visible update and the final result in that exact thread (reply_to/root_id: \`${task.mattermost_root_post_id}\`). Do not post a new top-level DM message.`;
 }
 
 /**
@@ -61,6 +69,7 @@ export async function dispatchTaskToGateway(taskId: string): Promise<DispatchRes
   // by OpenClaw on each dispatch attempt.
   const existingCorrelationId = task.correlation_id;
   const finalCorrelationId = existingCorrelationId || correlationId;
+  let execution: ExecutionRun | undefined;
   run(
     'UPDATE tasks SET correlation_id = COALESCE(correlation_id, ?), gateway_task_id = ?, last_sync_attempt = ?, updated_at = ? WHERE id = ?',
     [finalCorrelationId, correlationId, now, now, taskId],
@@ -94,13 +103,13 @@ export async function dispatchTaskToGateway(taskId: string): Promise<DispatchRes
       throw new Error('Failed to create agent session');
     }
 
-    // Build the structured task message with correlationId
-    const priorityEmoji: Record<string, string> = { low: '🔵', normal: '⚪', high: '🟡', urgent: '🔴' };
-    const taskMessage = buildTaskMessage(task, agent, finalCorrelationId, priorityEmoji[task.priority] || '⚪');
-
-    // Send via chat.send RPC
     const prefix = agent.session_key_prefix || 'agent:main:';
     const sessionKey = `${prefix}${session.openclaw_session_id}`;
+    execution = startExecution({ taskId, agentId: agent.id, sessionKey, runIdentity: correlationId, leaseOwner: `dispatch:${uuidv4()}` });
+    const priorityEmoji: Record<string, string> = { low: '🔵', normal: '⚪', high: '🟡', urgent: '🔴' };
+    const taskMessage = buildTaskMessage(task, agent, finalCorrelationId, priorityEmoji[task.priority] || '⚪', execution);
+
+    // Send via chat.send RPC
     await client.call('chat.send', {
       sessionKey,
       message: taskMessage,
@@ -132,6 +141,7 @@ export async function dispatchTaskToGateway(taskId: string): Promise<DispatchRes
     return { success: true, correlationId: finalCorrelationId };
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : 'Unknown dispatch error';
+    if (execution) abandonDispatchExecution(execution.id, errorMsg, task.status, new Date());
     console.error(`[Dispatch] Failed to dispatch task ${taskId}:`, errorMsg);
 
     // Save as pending_sync for retry
@@ -198,17 +208,19 @@ export async function retryDispatch(taskId: string, maxRetries: number): Promise
  * agent must fetch it via GET /api/tasks/{id} before starting work. This
  * keeps LLM context tight and MC as the single source of truth.
  */
-function buildTaskMessage(
+export function buildTaskMessage(
   task: Task & { assigned_agent_name?: string },
   agent: Agent,
   correlationId: string,
   priorityEmoji: string,
+  execution: ExecutionRun,
 ): string {
   const mcUrl = (process.env.MISSION_CONTROL_URL || 'http://localhost:4000').replace(/\/$/, '');
 
   const mattermostLine = agent.mattermost_channel
     ? `\n**Output channel:** Post final output to Mattermost \`#${agent.mattermost_channel}\`, then log the post URL as a deliverable (step 3 below).`
     : '';
+  const mattermostThreadLine = buildMattermostThreadInstruction(task);
 
   const masterDelegationNote = agent.is_master
     ? `\n**As orchestrator:** When you delegate this task to a specialist, first update the task status to \`assigned\` and set \`assigned_agent_id\` to the specialist's MC agent ID (step 1a below), then move it to \`in_progress\` once they begin.`
@@ -220,18 +232,19 @@ function buildTaskMessage(
 **Task ID:** \`${task.id}\`
 **Full brief:** ${mcUrl}/api/tasks/${task.id}
 ${task.due_date ? `**Due:** ${task.due_date}\n` : ''}
-Fetch the full brief via \`GET ${mcUrl}/api/tasks/${task.id}\` before starting work. The \`description\` and \`brief\` fields contain all context and acceptance criteria.${mattermostLine}${masterDelegationNote}
+Fetch the full brief via \`GET ${mcUrl}/api/tasks/${task.id}\` before starting work. The \`description\` and \`brief\` fields contain all context and acceptance criteria.${mattermostLine}${mattermostThreadLine}${masterDelegationNote}
 
 ---
 
 **MANDATORY API CALLS — execute in this order:**
 
-1. **Mark as in progress** immediately when you begin (before any work):
+1. **Acknowledge and renew the durable execution** immediately when you begin, then every 60–120 seconds while working:
 \`\`\`
-PATCH ${mcUrl}/api/tasks/${task.id}
+POST ${mcUrl}/api/tasks/${task.id}/execution
 Content-Type: application/json
-{ "status": "in_progress" }
+{ "action": "heartbeat", "runId": "${execution.id}", "leaseOwner": "${execution.lease_owner}", "leaseEpoch": ${execution.lease_epoch}, "eventKey": "heartbeat:<monotonic-sequence>", "checkpoint": { "phase": "<current phase>", "next": "<next action>" } }
 \`\`\`
+Persist these values for this run. A \`409 STALE_LEASE\` means a newer fenced worker owns recovery: stop immediately. Progress activities also renew the lease as a compatibility path, but explicit checkpoint heartbeats are authoritative.
 ${agent.is_master ? `\n1a. **When delegating to a specialist**, set assigned agent first:\n\`\`\`\nPATCH ${mcUrl}/api/tasks/${task.id}\nContent-Type: application/json\n{ "status": "assigned", "assigned_agent_id": "<specialist_mc_agent_id>" }\n\`\`\`\n` : ''}
 2. **Log deliverables** for each output (file path, URL, or artifact):
 \`\`\`
@@ -245,6 +258,7 @@ ${agent.mattermost_channel ? `Use \`deliverable_type: "url"\` to record the Matt
 \`TASK_COMPLETE[${correlationId}]: [one-line summary of what you did]\`
 
 The correlationId \`${correlationId}\` is required for Mission Control to detect completion. Do not omit or alter it.
+Before emitting it, close the durable run through the execution endpoint with action \`transition\`, the lease values above, a unique event key, and state \`complete\`. Use \`waiting_input\`, \`blocked\`, \`failed\`, or \`cancelled\` when appropriate.
 Do not send any other messages after completion. Do not report back to any agent or ask for confirmation.
 
 **If you cannot complete the task** (blocker, missing info, unrecoverable error): call \`POST ${mcUrl}/api/tasks/${task.id}/fail\` with \`{"reason": "description of the blocker"}\` and stop.`;

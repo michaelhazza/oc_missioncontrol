@@ -8,6 +8,7 @@ import { getDb } from '@/lib/db';
 import { broadcast } from '@/lib/events';
 import { CreateActivitySchema } from '@/lib/validation';
 import type { TaskActivity } from '@/lib/types';
+import { heartbeatFromActivity, transitionFromActivity } from '@/lib/openclaw/execution-supervision';
 
 export const dynamic = 'force-dynamic';
 
@@ -147,6 +148,28 @@ export async function POST(
     });
 
     insertActivity();
+
+    // Normal agent activity is the compatibility bridge into durable
+    // supervision. Explicit /execution checkpoint heartbeats remain the
+    // preferred contract, but existing agents now renew ownership without a
+    // second prompt channel.
+    if (resolvedAgentId && resolvedAgentId === task.assigned_agent_id) {
+      try {
+        if (activity_type === 'progress') {
+          const metadataRecord = metadata as unknown as Record<string, unknown> | undefined;
+          const suppliedCheckpoint = metadataRecord?.checkpoint && typeof metadataRecord.checkpoint === 'object'
+            ? (metadataRecord.checkpoint as object)
+            : undefined;
+          heartbeatFromActivity(taskId, resolvedAgentId, `activity:${id}`, suppliedCheckpoint, new Date(now));
+        } else if (activity_type === 'completed') {
+          transitionFromActivity(taskId, resolvedAgentId, `activity:${id}:complete`, 'complete', message, new Date(now));
+        } else if (activity_type === 'blocked') {
+          transitionFromActivity(taskId, resolvedAgentId, `activity:${id}:blocked`, 'blocked', message, new Date(now));
+        }
+      } catch (executionError) {
+        console.error('[Activities] Durable execution projection failed:', executionError);
+      }
+    }
 
     // If activity_type is 'completed', also mark the task as done
     if (activity_type === 'completed') {

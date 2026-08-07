@@ -81,6 +81,10 @@ export interface Task {
   trigger_type?: TriggerType;
   trigger_source?: string;
   cron_job_id?: string;
+  mattermost_channel_id?: string;
+  mattermost_root_post_id?: string;
+  mattermost_source_post_id?: string;
+  mattermost_thread_url?: string;
   // Gateway integration fields
   correlation_id?: string;
   gateway_task_id?: string;
@@ -365,6 +369,18 @@ export interface CreateTaskRequest {
   created_by_agent_id?: string;
   business_id?: string;
   due_date?: string;
+  workspace_id?: string;
+  workflow_template_id?: string;
+  status?: TaskStatus;
+  brief?: string;
+  trigger_type?: TriggerType;
+  trigger_source?: string;
+  cron_job_id?: string;
+  mattermost_channel_id?: string;
+  mattermost_root_post_id?: string;
+  mattermost_source_post_id?: string;
+  mattermost_thread_url?: string;
+  depends_on_task_ids?: string[];
 }
 
 export interface UpdateTaskRequest extends Partial<CreateTaskRequest> {

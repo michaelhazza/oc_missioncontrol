@@ -18,6 +18,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { queryOne, queryAll, run } from '@/lib/db';
 import { getOpenClawClient } from '@/lib/openclaw/client';
 import { broadcast } from '@/lib/events';
+import { transitionFromActivity } from '@/lib/openclaw/execution-supervision';
 import { mapGatewayState } from './workspace-settings';
 import type { Task, Agent } from '@/lib/types';
 
@@ -191,6 +192,13 @@ function handleCompletionByContentMatch(data: Record<string, unknown>, summary: 
  * Mark a task as completed (moves to review stage).
  */
 function completeTask(task: Task, summary: string, now: string): void {
+  if (task.assigned_agent_id) {
+    try {
+      transitionFromActivity(task.id, task.assigned_agent_id, `gateway-complete:${task.correlation_id || task.gateway_task_id || now}`, 'complete', summary, new Date(now));
+    } catch (error) {
+      console.error('[Sync] Failed to close durable execution:', error);
+    }
+  }
   // Move to review — all completed tasks land here regardless of agent or task type
   run(
     `UPDATE tasks SET status = ?, sync_status = ?, gateway_completion_notes = ?, updated_at = ? WHERE id = ?`,

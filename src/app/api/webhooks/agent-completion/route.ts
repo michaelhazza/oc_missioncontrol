@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { v4 as uuidv4 } from 'uuid';
 import { createHmac, timingSafeEqual } from 'crypto';
 import { queryOne, queryAll, run } from '@/lib/db';
+import { transitionFromActivity } from '@/lib/openclaw/execution-supervision';
 import type { Task, Agent, OpenClawSession } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -84,6 +85,14 @@ export async function POST(request: NextRequest) {
 
       if (!task) {
         return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+      }
+
+      if (task.assigned_agent_id) {
+        try {
+          transitionFromActivity(task.id, task.assigned_agent_id, `webhook-complete:${body.event_id || body.correlation_id || now}`, 'complete', body.summary || 'Task finished', new Date(now));
+        } catch (error) {
+          console.error('[Completion webhook] Failed to close durable execution:', error);
+        }
       }
 
       // Only move to review if not already in review or done
