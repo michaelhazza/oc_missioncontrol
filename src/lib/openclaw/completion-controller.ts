@@ -5,7 +5,7 @@ import { getOpenClawClient } from './client';
 import { releaseReadyDependentTasks } from '@/lib/task-dependencies';
 import { drainMattermostOutbox,queueMattermostMilestone } from './mattermost-task-updates';
 
-export const CONTROLLER_INTERVAL_MS=90_000;
+export const CONTROLLER_INTERVAL_MS=30*60_000;
 const LEASE_MS=75_000;
 const MAX_ACTION_ATTEMPTS=2;
 const ACTION_LEASE_MS=60_000;
@@ -83,7 +83,7 @@ async function deliverAuthorityAction(decision:Decision,actionId:string){
   const sessionKey=buildAuthoritySessionKey(agent,session?.openclaw_session_id);
   const thread=decision.authority==='michael'&&task.mattermost_root_post_id?` Deliver the decision request in Mattermost channel ${task.mattermost_channel_id||'(originating channel)'}, replying to root post ${task.mattermost_root_post_id}${task.mattermost_thread_url?` (${task.mattermost_thread_url})`:''}; never create a top-level message.`:'';
   const client=getOpenClawClient();if(!client.isConnected())await client.connect();
-  const resolution=decision.authority==='oracle'?` Review the task brief, completion notes, and every linked deliverable. Resolve action ${actionId} through PATCH /api/oracle/completion-controller/${actionId} with resolution passed, rework, or cancelled and a specific evidence-based note. Process only this action; Mission Control will release the next review after resolution.`:' Resolve through Mission Control with evidence; do not create duplicate work.';
+  const resolution=decision.authority==='oracle'?` Review the task brief, completion notes, and every linked deliverable. Resolve action ${actionId} through PATCH /api/oracle/completion-controller/${actionId} with resolution passed, rework, or cancelled and a specific evidence-based note. Process only this action; Mission Control will release the next review after resolution. Remain silent in the originating Mattermost thread unless a confirmed blocker requires Michael's decision.`:' Resolve through Mission Control with evidence; do not create duplicate work.';
   await client.call('chat.send',{sessionKey,idempotencyKey:`completion-controller-${actionId}`,message:`Mission Control completion action ${actionId} for task ${task.id} (${task.title}). Classification: ${decision.classification}. Required action: ${decision.action}. Reason: ${decision.reason}.${thread}${resolution}`});
 }
 
@@ -102,18 +102,16 @@ async function executeAction(decision:Decision,actionId:string,owner:string,now:
   try{
     if(decision.action==='dispatch'){
       const result=await dispatchTaskToGateway(decision.taskId); if(!result.success)throw new Error(result.error||'Dispatch failed');
-      queueMattermostMilestone(decision.taskId,'dispatched','The assigned specialist has been dispatched through the durable execution path.',`controller:${actionId}:dispatched`,now);
     }else if(decision.action==='close'){
       run("UPDATE tasks SET status='done',updated_at=? WHERE id=? AND status IN ('review','verification','testing')",[now.toISOString(),decision.taskId]);
       releaseReadyDependentTasks(decision.taskId);
-      queueMattermostMilestone(decision.taskId,'completed','Objective completion evidence passed and Mission Control closed the task. Deliverables remain attached to the task record.',`controller:${actionId}:completed`,now);
     }else{
       await deliverAuthorityAction(decision,actionId);
       if(decision.action==='return_rework'){
         run("UPDATE tasks SET status='pending_dispatch',status_reason=?,updated_at=? WHERE id=? AND status IN ('review','verification','testing')",[`Rework required: ${decision.reason}`,now.toISOString(),decision.taskId]);
         run(`INSERT INTO task_activities(id,task_id,agent_id,activity_type,message,metadata,created_at) VALUES(?,?,NULL,'status_changed',?,?,?)`,[randomUUID(),decision.taskId,'Queued specialist rework for automatic durable dispatch',JSON.stringify({controllerActionId:actionId,from:decision.evidence.status,to:'pending_dispatch'}),now.toISOString()]);
       }
-      const milestone=decision.action==='request_verification'?'verification':decision.action==='return_rework'?'rework':decision.authority==='michael'?'decision':decision.classification==='blocked'?'blocked':decision.classification==='failed'?'failed':null;
+      const milestone=decision.authority==='michael'?'decision':decision.classification==='blocked'?'blocked':decision.classification==='failed'?'failed':null;
       if(milestone)queueMattermostMilestone(decision.taskId,milestone,'Mission Control recorded this material workflow transition. Further updates will be posted only when the state changes.',`controller:${actionId}:${milestone}`,now);
     }
     run("UPDATE completion_controller_actions SET state='completed',completed_at=?,delivered_at=CASE WHEN ? THEN ? ELSE delivered_at END,resolution_status=CASE WHEN ? THEN resolution_status WHEN ? THEN 'delivery_complete' ELSE resolution_status END,resolved_at=CASE WHEN ? THEN resolved_at WHEN ? THEN ? ELSE resolved_at END,claim_owner=NULL,claim_expires_at=NULL,updated_at=? WHERE id=? AND claim_owner=?",[now.toISOString(),external?1:0,now.toISOString(),requiresResolution?1:0,external?1:0,requiresResolution?1:0,external?1:0,now.toISOString(),now.toISOString(),actionId,owner]);
