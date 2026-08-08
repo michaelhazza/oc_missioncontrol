@@ -110,8 +110,8 @@ async function executeAction(decision:Decision,actionId:string,owner:string,now:
     }else{
       await deliverAuthorityAction(decision,actionId);
       if(decision.action==='return_rework'){
-        run("UPDATE tasks SET status='inbox',status_reason=?,updated_at=? WHERE id=? AND status IN ('review','verification','testing')",[`Rework required: ${decision.reason}`,now.toISOString(),decision.taskId]);
-        run(`INSERT INTO task_activities(id,task_id,agent_id,activity_type,message,metadata,created_at) VALUES(?,?,NULL,'status_changed',?,?,?)`,[randomUUID(),decision.taskId,'Returned to inbox for specialist rework',JSON.stringify({controllerActionId:actionId,from:decision.evidence.status,to:'inbox'}),now.toISOString()]);
+        run("UPDATE tasks SET status='pending_dispatch',status_reason=?,updated_at=? WHERE id=? AND status IN ('review','verification','testing')",[`Rework required: ${decision.reason}`,now.toISOString(),decision.taskId]);
+        run(`INSERT INTO task_activities(id,task_id,agent_id,activity_type,message,metadata,created_at) VALUES(?,?,NULL,'status_changed',?,?,?)`,[randomUUID(),decision.taskId,'Queued specialist rework for automatic durable dispatch',JSON.stringify({controllerActionId:actionId,from:decision.evidence.status,to:'pending_dispatch'}),now.toISOString()]);
       }
       const milestone=decision.action==='request_verification'?'verification':decision.action==='return_rework'?'rework':decision.authority==='michael'?'decision':decision.classification==='blocked'?'blocked':decision.classification==='failed'?'failed':null;
       if(milestone)queueMattermostMilestone(decision.taskId,milestone,'Mission Control recorded this material workflow transition. Further updates will be posted only when the state changes.',`controller:${actionId}:${milestone}`,now);
