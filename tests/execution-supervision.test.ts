@@ -104,6 +104,21 @@ test('in_progress without a lease is classified unhealthy and escalated once',()
   assert.equal(supervision.reconcileExecutions(new Date('2026-08-07T01:01:00.000Z')).filter(action=>action.run.task_id==='task-unleased').length,0);
 });
 
+test('a later unleased epoch receives a distinct synthetic run identity',()=>{
+  db.run("INSERT INTO tasks(id,title,status,assigned_agent_id,workspace_id) VALUES('task-repeated-unleased','repeated','in_progress','agent-a','default')");
+  const firstActions=supervision.reconcileExecutions(new Date('2026-08-07T01:10:00.000Z'));
+  const first=firstActions.find(action=>action.run.task_id==='task-repeated-unleased')!;
+  supervision.markRecoveryDelivered(first);
+  db.run("UPDATE task_execution_runs SET state='cancelled',terminal_at=? WHERE id=?",['2026-08-07T01:11:00.000Z',first.run.id]);
+
+  const secondActions=supervision.reconcileExecutions(new Date('2026-08-07T01:12:00.000Z'));
+  const second=secondActions.find(action=>action.run.task_id==='task-repeated-unleased')!;
+  assert.equal(second.kind,'oracle');
+  assert.notEqual(second.run.run_identity,first.run.run_identity);
+  supervision.markRecoveryDelivered(second);
+  db.run("UPDATE tasks SET status='done' WHERE id='task-repeated-unleased'");
+});
+
 test('explicit redispatch supersedes an acknowledged stalled run with a fresh lease',()=>{
   task('task-reactivated');
   const t0=new Date('2026-08-07T02:00:00.000Z');

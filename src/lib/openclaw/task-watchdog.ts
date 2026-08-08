@@ -11,7 +11,7 @@ async function deliver(action:RecoveryAction):Promise<void>{
     await client.call('chat.send',{
       sessionKey:action.run.session_key,
       idempotencyKey:action.recoveryKey,
-      message:`Mission Control durable recovery: continue task ${action.run.task_id} from its last persisted checkpoint. Recovery lease epoch ${action.run.lease_epoch} is authoritative. Do not restart completed work or create a second worker. POST heartbeats with this lease owner/epoch every 1–2 minutes, and finish only with an explicit terminal transition.`,
+      message:`Mission Control durable recovery: re-fetch task ${action.run.task_id} from Mission Control, then continue it from the last persisted checkpoint. The current task brief is authoritative. Recovery lease epoch ${action.run.lease_epoch} is authoritative. Do not restart completed work or create a second worker. POST heartbeats with this lease owner/epoch every 1–2 minutes, and finish only with an explicit terminal transition.`,
     });
     return;
   }

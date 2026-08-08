@@ -213,7 +213,7 @@ export function reconcileExecutions(now=new Date()): RecoveryAction[] {
     for(const item of missing){
       const id=randomUUID(); const sessionKey=`${item.session_key_prefix||`agent:${item.gateway_agent_id||'unknown'}:`}${item.session_id||'mission-control-recovery'}`;
       run(`INSERT INTO task_execution_runs(id,task_id,agent_id,session_key,run_identity,state,lease_epoch,oracle_status,created_at,updated_at)
-        VALUES(?,?,?,?,?,'stalled',0,'pending',?,?)`,[id,item.task_id,item.agent_id,sessionKey,`legacy:${item.task_id}`,iso,iso]);
+        VALUES(?,?,?,?,?,'stalled',0,'pending',?,?)`,[id,item.task_id,item.agent_id,sessionKey,`legacy:${item.task_id}:${id}`,iso,iso]);
       event(id,item.task_id,'missing-lease','execution_stalled',0,{reason:'in_progress task has no execution lease'},iso);
       event(id,item.task_id,'oracle:0','oracle_escalation_requested',0,{reason:'missing execution lease; automatic resume is unsafe without checkpoint ownership'},iso);
       activity(item.task_id,item.agent_id,'execution_stalled','Execution is unhealthy: in_progress task has no durable lease',{runId:id,reason:'missing execution lease'},iso);
