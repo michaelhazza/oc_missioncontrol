@@ -45,11 +45,25 @@ export function startExecution(input: {taskId:string; agentId:string; sessionKey
     const task = queryOne<{status:string; assigned_agent_id:string|null}>('SELECT status, assigned_agent_id FROM tasks WHERE id = ?', [input.taskId]);
     if (!task) throw new Error('Task not found');
     if (task.assigned_agent_id !== input.agentId) throw new ExecutionConflictError('Agent is not assigned to task');
-    if (!['assigned','in_progress'].includes(task.status)) throw new ExecutionConflictError(`Task state ${task.status} cannot execute`);
+    if (!['pending_dispatch','assigned','in_progress'].includes(task.status)) throw new ExecutionConflictError(`Task state ${task.status} cannot execute`);
+    if (task.status === 'pending_dispatch') {
+      const incompleteDependencies = queryOne<{ count: number }>(`SELECT COUNT(*) AS count
+        FROM task_dependencies d JOIN tasks prerequisite ON prerequisite.id=d.depends_on_task_id
+        WHERE d.task_id=? AND prerequisite.status!='done'`, [input.taskId])?.count || 0;
+      if (incompleteDependencies > 0) throw new ExecutionConflictError('Task dependencies are incomplete');
+    }
     const existing = queryOne<ExecutionRun>(`SELECT * FROM task_execution_runs WHERE task_id = ? AND state IN ('running','waiting_input','blocked','stalled','recovering')`, [input.taskId]);
     if (existing) {
       if (existing.run_identity === input.runIdentity) return existing;
-      throw new ExecutionConflictError('Task already has a live execution run');
+      const supersedable = existing.state === 'stalled' && ['acknowledged','resolved'].includes(existing.oracle_status);
+      if (!supersedable) throw new ExecutionConflictError('Task already has a live execution run');
+      const supersededAt = now.toISOString();
+      run(`UPDATE task_execution_runs SET state='cancelled',oracle_status='resolved',lease_owner=NULL,
+        lease_expires_at=NULL,terminal_at=?,updated_at=? WHERE id=?`,[supersededAt,supersededAt,existing.id]);
+      event(existing.id,input.taskId,`superseded:${input.runIdentity}`,'execution_superseded',existing.lease_epoch,
+        {replacementRunIdentity:input.runIdentity,reason:'acknowledged stalled run replaced by explicit redispatch'},supersededAt);
+      activity(input.taskId,input.agentId,'execution_superseded','Acknowledged stalled execution superseded by fresh durable dispatch',
+        {runId:existing.id,replacementRunIdentity:input.runIdentity},supersededAt);
     }
     const iso = now.toISOString();
     const id = randomUUID();

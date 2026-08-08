@@ -44,7 +44,7 @@ function acquire(owner:string,now:Date){
 
 export function classifyTask(task:TaskRow,now=new Date()):Decision{
   const dependencies=queryAll<{status:string}>('SELECT prerequisite.status FROM task_dependencies d JOIN tasks prerequisite ON prerequisite.id=d.depends_on_task_id WHERE d.task_id=?',[task.id]);
-  const execution=queryOne<{state:string;lease_expires_at:string|null;heartbeat_at:string|null;oracle_status:string}>('SELECT state,lease_expires_at,heartbeat_at,oracle_status FROM task_execution_runs WHERE task_id=? ORDER BY created_at DESC LIMIT 1',[task.id]);
+  const execution=queryOne<{state:string;lease_expires_at:string|null;heartbeat_at:string|null;oracle_status:string;updated_at:string}>('SELECT state,lease_expires_at,heartbeat_at,oracle_status,updated_at FROM task_execution_runs WHERE task_id=? ORDER BY created_at DESC LIMIT 1',[task.id]);
   const deliverables=queryOne<{count:number}>('SELECT COUNT(*) AS count FROM task_deliverables WHERE task_id=?',[task.id])?.count||0;
   const completionEvidence=queryOne<{count:number}>("SELECT COUNT(*) AS count FROM task_activities WHERE task_id=? AND activity_type='completed'",[task.id])?.count||0;
   const objectiveEvidence=queryOne<{count:number}>("SELECT COUNT(*) AS count FROM task_activities WHERE task_id=? AND activity_type IN ('verification_passed','completion_contract_passed','test_passed')",[task.id])?.count||0;
@@ -53,6 +53,7 @@ export function classifyTask(task:TaskRow,now=new Date()):Decision{
   const ageMs=now.getTime()-Date.parse(task.updated_at);
   let classification:CompletionClassification,reason:string,action:string|undefined,authority:Authority='controller';
   if(dependencies.some(dep=>dep.status!=='done')){classification='awaiting_dependency';reason='One or more prerequisite tasks are non-terminal';}
+  else if(task.status==='in_progress'&&execution?.state==='stalled'&&['acknowledged','resolved'].includes(execution.oracle_status)&&Date.parse(task.updated_at)>Date.parse(execution.updated_at)){classification='awaiting_agent';reason='Task was explicitly reactivated after its prior stall was acknowledged; fresh durable dispatch required';action='dispatch';authority='controller';}
   else if(task.status==='in_progress'&&(execution?.state==='stalled'||!execution||!execution.lease_expires_at||Date.parse(execution.lease_expires_at)<=now.getTime())){classification='stalled';reason='Execution supervision owns stale-run recovery';authority='oracle';}
   else if(task.status==='in_progress'&&execution&&execution.lease_expires_at&&Date.parse(execution.lease_expires_at)>now.getTime()){classification='healthy_running';reason='Valid fenced execution lease; no controller action';authority='specialist';}
   else if(task.status==='assigned'&&!execution){classification='awaiting_agent';reason='Assigned task has not been dispatched through durable execution';action='dispatch';authority='controller';}
