@@ -6,6 +6,7 @@ import { getMissionControlUrl } from '@/lib/config';
 import { handleStageTransition, handleStageFailure, getTaskWorkflow, drainQueue, populateTaskRolesFromAgents } from '@/lib/workflow-engine';
 import { notifyLearner } from '@/lib/learner';
 import { releaseReadyDependentTasks } from '@/lib/task-dependencies';
+import { evaluateCompletionContract } from '@/lib/completion-contract';
 import { UpdateTaskSchema } from '@/lib/validation';
 import type { Task, UpdateTaskRequest, Agent, TaskDeliverable } from '@/lib/types';
 
@@ -171,6 +172,12 @@ export async function PATCH(
 
     // Handle status change
     if (nextStatus !== undefined && nextStatus !== existing.status) {
+      if(nextStatus==='done'){
+        const contract=evaluateCompletionContract(id,new Date(now));
+        if(contract.required&&!contract.ready){
+          return NextResponse.json({error:'Completion contract is not satisfied',reasons:contract.reasons},{status:409});
+        }
+      }
       updates.push('status = ?');
       values.push(nextStatus);
 

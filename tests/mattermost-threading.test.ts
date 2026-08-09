@@ -31,5 +31,7 @@ test('dispatch pins all user-visible output to the originating thread', () => {
   });
   assert.match(instruction, /root-1/);
   assert.match(instruction, /Do not post a new top-level DM message/);
+  assert.match(instruction, /sole routine speaker/);
+  assert.match(instruction, /token-stream fragments/);
   assert.equal(buildMattermostThreadInstruction(baseTask), '');
 });

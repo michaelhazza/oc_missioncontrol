@@ -29,7 +29,7 @@ export function buildMattermostThreadInstruction(task: Task): string {
   if (!task.mattermost_root_post_id) return '';
   const destination = task.mattermost_thread_url ||
     `Mattermost channel ${task.mattermost_channel_id || '(current channel)'}, root post ${task.mattermost_root_post_id}`;
-  return `\n**Originating Mattermost thread:** ${destination}\n**Reply requirement:** Post every user-visible update and the final result in that exact thread (reply_to/root_id: \`${task.mattermost_root_post_id}\`). Do not post a new top-level DM message.`;
+  return `\n**Originating Mattermost thread:** ${destination}\n**Single-speaker requirement:** You are the sole routine speaker for this task. Post only meaningful, complete checkpoints and the final result in this exact thread (reply_to/root_id: \`${task.mattermost_root_post_id}\`). Never post acknowledgements, internal status labels, token-stream fragments, heartbeat confirmations, or messages such as "working", "checking", or "I". Mission Control heartbeats and routine lifecycle transitions are silent. Do not post a new top-level DM message.`;
 }
 
 /**
@@ -232,7 +232,7 @@ export function buildTaskMessage(
 **Task ID:** \`${task.id}\`
 **Full brief:** ${mcUrl}/api/tasks/${task.id}
 ${task.due_date ? `**Due:** ${task.due_date}\n` : ''}
-Fetch the full brief via \`GET ${mcUrl}/api/tasks/${task.id}\` before starting work. The \`description\` and \`brief\` fields contain all context and acceptance criteria.${mattermostLine}${mattermostThreadLine}${masterDelegationNote}
+Fetch the full brief via \`GET ${mcUrl}/api/tasks/${task.id}\` and its completion contract via \`GET ${mcUrl}/api/tasks/${task.id}/completion-contract\` before starting work. The completion contract is authoritative for acceptance criteria, protected boundaries, and closure.${mattermostLine}${mattermostThreadLine}${masterDelegationNote}
 
 ---
 
@@ -254,7 +254,26 @@ Content-Type: application/json
 \`\`\`
 ${agent.mattermost_channel ? `Use \`deliverable_type: "url"\` to record the Mattermost post URL from \`#${agent.mattermost_channel}\`.` : ''}
 
-3. **Signal completion** — end your final response with this exact line:
+3. **Submit the completion report** before signalling completion:
+
+\`POST ${mcUrl}/api/tasks/${task.id}/completion-contract\`
+
+\`\`\`json
+{
+  "criteria": [{ "id": "<GET response id>", "status": "passed", "evidence": "<specific evidence>" }],
+  "boundaries": [{ "id": "<GET response id>", "status": "intact", "evidence": "<specific evidence>" }],
+  "plan_vs_actual": "<what was planned versus delivered>",
+  "deviations": [],
+  "deferred_work": [],
+  "verification_commands": [{ "command": "<exact command>", "exit_code": 0, "output_summary": "<result>" }],
+  "verification_ran_at": "<ISO-8601 timestamp>",
+  "next_action": "None — task complete",
+  "submitted_by_agent_id": "${agent.id}"
+}
+\`\`\`
+Address every returned criterion and boundary exactly once by ID. Mission Control rejects closure if any criterion lacks evidence, a boundary is violated, verification failed/staled, or the report is incomplete. Waivers must be explicit and evidenced.
+
+4. **Signal completion** — end your final response with this exact line:
 \`TASK_COMPLETE[${correlationId}]: [one-line summary of what you did]\`
 
 The correlationId \`${correlationId}\` is required for Mission Control to detect completion. Do not omit or alter it.

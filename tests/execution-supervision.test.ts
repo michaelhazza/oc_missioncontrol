@@ -24,6 +24,23 @@ after(()=>{db.closeDb();fs.rmSync(testDir,{recursive:true,force:true});});
 
 function task(id:string){db.run("INSERT INTO tasks(id,title,status,assigned_agent_id,workspace_id) VALUES(?,?,'assigned','agent-a','default')",[id,id]);}
 
+test('controller dispatch starts a ready pending_dispatch task but preserves dependency fencing',()=>{
+  db.run("INSERT INTO tasks(id,title,status,assigned_agent_id,workspace_id) VALUES('task-ready-dispatch','ready','pending_dispatch','agent-a','default')");
+  const started=supervision.startExecution({taskId:'task-ready-dispatch',agentId:'agent-a',sessionKey:'agent:tank:ready',runIdentity:'ready-run',leaseOwner:'ready-owner'});
+  assert.equal(started.state,'running');
+  assert.equal(db.queryOne<{status:string}>("SELECT status FROM tasks WHERE id='task-ready-dispatch'")?.status,'in_progress');
+  supervision.transitionExecution({runId:started.id,leaseOwner:'ready-owner',leaseEpoch:1,eventKey:'ready-done',state:'complete'});
+
+  db.run("INSERT INTO tasks(id,title,status,assigned_agent_id,workspace_id) VALUES('task-prerequisite','prerequisite','in_progress','agent-a','default')");
+  db.run("INSERT INTO tasks(id,title,status,assigned_agent_id,workspace_id) VALUES('task-dependent-dispatch','dependent','pending_dispatch','agent-a','default')");
+  db.run("INSERT INTO task_dependencies(task_id,depends_on_task_id) VALUES('task-dependent-dispatch','task-prerequisite')");
+  assert.throws(
+    ()=>supervision.startExecution({taskId:'task-dependent-dispatch',agentId:'agent-a',sessionKey:'agent:tank:dependent',runIdentity:'dependent-run',leaseOwner:'dependent-owner'}),
+    /dependencies are incomplete/,
+  );
+  db.run("UPDATE tasks SET status='done' WHERE id IN ('task-prerequisite','task-dependent-dispatch')");
+});
+
 test('lease heartbeat is idempotent and stale fencing is rejected',()=>{
   task('task-one');
   const t0=new Date('2026-08-06T20:00:00.000Z');
@@ -85,6 +102,37 @@ test('in_progress without a lease is classified unhealthy and escalated once',()
   supervision.markRecoveryDelivered(escalation!);
   assert.equal(supervision.getExecution('task-unleased')?.state,'stalled');
   assert.equal(supervision.reconcileExecutions(new Date('2026-08-07T01:01:00.000Z')).filter(action=>action.run.task_id==='task-unleased').length,0);
+});
+
+test('a later unleased epoch receives a distinct synthetic run identity',()=>{
+  db.run("INSERT INTO tasks(id,title,status,assigned_agent_id,workspace_id) VALUES('task-repeated-unleased','repeated','in_progress','agent-a','default')");
+  const firstActions=supervision.reconcileExecutions(new Date('2026-08-07T01:10:00.000Z'));
+  const first=firstActions.find(action=>action.run.task_id==='task-repeated-unleased')!;
+  supervision.markRecoveryDelivered(first);
+  db.run("UPDATE task_execution_runs SET state='cancelled',terminal_at=? WHERE id=?",['2026-08-07T01:11:00.000Z',first.run.id]);
+
+  const secondActions=supervision.reconcileExecutions(new Date('2026-08-07T01:12:00.000Z'));
+  const second=secondActions.find(action=>action.run.task_id==='task-repeated-unleased')!;
+  assert.equal(second.kind,'oracle');
+  assert.notEqual(second.run.run_identity,first.run.run_identity);
+  supervision.markRecoveryDelivered(second);
+  db.run("UPDATE tasks SET status='done' WHERE id='task-repeated-unleased'");
+});
+
+test('explicit redispatch supersedes an acknowledged stalled run with a fresh lease',()=>{
+  task('task-reactivated');
+  const t0=new Date('2026-08-07T02:00:00.000Z');
+  const first=supervision.startExecution({taskId:'task-reactivated',agentId:'agent-a',sessionKey:'old-session',runIdentity:'old-run',leaseOwner:'old-worker'},t0);
+  const recovery=supervision.reconcileExecutions(new Date(t0.getTime()+supervision.LEASE_TTL_MS+1));supervision.markRecoveryDelivered(recovery[0]);
+  const escalation=supervision.reconcileExecutions(new Date(t0.getTime()+2*supervision.LEASE_TTL_MS+2));supervision.markRecoveryDelivered(escalation[0]);
+  supervision.acknowledgeOracle(first.id,'oracle','safe to redispatch',new Date(t0.getTime()+2*supervision.LEASE_TTL_MS+3));
+  db.run("UPDATE tasks SET status='in_progress',updated_at=? WHERE id=?",[new Date(t0.getTime()+2*supervision.LEASE_TTL_MS+4).toISOString(),'task-reactivated']);
+
+  const replacement=supervision.startExecution({taskId:'task-reactivated',agentId:'agent-a',sessionKey:'new-session',runIdentity:'new-run',leaseOwner:'new-worker'},new Date(t0.getTime()+2*supervision.LEASE_TTL_MS+5));
+  assert.equal(replacement.state,'running');
+  assert.equal(replacement.lease_epoch,1);
+  assert.equal(db.queryOne<{state:string}>('SELECT state FROM task_execution_runs WHERE id=?',[first.id])?.state,'cancelled');
+  assert.ok(supervision.getExecutionEvents('task-reactivated').some(item=>item.event_type==='execution_superseded'));
 });
 
 test('normal dispatch contract flows through activity heartbeat to terminal task state',()=>{

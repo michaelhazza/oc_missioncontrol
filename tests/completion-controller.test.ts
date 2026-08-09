@@ -4,7 +4,7 @@ import fs from'node:fs';import os from'node:os';import path from'node:path';
 const dir=fs.mkdtempSync(path.join(os.tmpdir(),'mc-controller-'));process.env.DATABASE_PATH=path.join(dir,'db.sqlite');process.env.OPENCLAW_WEBHOOK_SECRET='test';
 let db:typeof import('../src/lib/db');let controller:typeof import('../src/lib/openclaw/completion-controller');let supervision:typeof import('../src/lib/openclaw/execution-supervision');
 const t0=new Date('2026-08-07T00:00:00.000Z');
-before(async()=>{db=await import('../src/lib/db');controller=await import('../src/lib/openclaw/completion-controller');supervision=await import('../src/lib/openclaw/execution-supervision');
+before(async()=>{process.env.MISSION_CONTROL_COMPLETION_ACTIONS='dispatch,request_verification,close';db=await import('../src/lib/db');controller=await import('../src/lib/openclaw/completion-controller');supervision=await import('../src/lib/openclaw/execution-supervision');
 db.run("INSERT OR IGNORE INTO agents(id,name,role,gateway_agent_id) VALUES('worker','Worker','specialist','worker')");db.run("INSERT OR IGNORE INTO agents(id,name,role,gateway_agent_id) VALUES('reviewer','Reviewer','reviewer','reviewer')");db.run("INSERT OR IGNORE INTO agents(id,name,role,gateway_agent_id) VALUES('oracle','Oracle','monitor','oracle')");
 });after(()=>{db.closeDb();fs.rmSync(dir,{recursive:true,force:true})});
 function add(id:string,status:string,agent:string|null='worker',reason:string|null=null){db.run('INSERT INTO tasks(id,title,status,assigned_agent_id,workspace_id,status_reason,updated_at) VALUES(?,?,?,?,?,?,?)',[id,id,status,agent,'default',reason,t0.toISOString()]);}
@@ -14,6 +14,8 @@ test('classifies complete lifecycle and produces idempotent dry-run actions',asy
   add('missing','assigned');
   add('parked','inbox');
   add('stalled','in_progress');db.run(`INSERT INTO task_execution_runs(id,task_id,agent_id,session_key,run_identity,state,lease_epoch,oracle_status,created_at,updated_at) VALUES('stalled-run','stalled','worker','s','stalled-identity','stalled',1,'pending',?,?)`,[t0.toISOString(),t0.toISOString()]);
+  add('reactivated','in_progress');db.run(`INSERT INTO task_execution_runs(id,task_id,agent_id,session_key,run_identity,state,lease_epoch,oracle_status,created_at,updated_at) VALUES('reactivated-run','reactivated','worker','s','reactivated-identity','stalled',1,'acknowledged',?,?)`,[t0.toISOString(),t0.toISOString()]);db.run("UPDATE tasks SET updated_at=? WHERE id='reactivated'",[new Date(t0.getTime()+1_000).toISOString()]);
+  add('completed-run-review','review');db.run(`INSERT INTO task_execution_runs(id,task_id,agent_id,session_key,run_identity,state,lease_epoch,oracle_status,created_at,updated_at) VALUES('completed-run-review-run','completed-run-review','worker','s','completed-run-review-identity','stalled',1,'pending',?,?)`,[t0.toISOString(),t0.toISOString()]);
   add('verify','review');db.run("INSERT INTO task_roles(id,task_id,role,agent_id) VALUES('role-v','verify','reviewer','reviewer')");
   add('close','review');db.run("INSERT INTO task_deliverables(id,task_id,deliverable_type,title) VALUES('d','close','file','evidence')");db.run("INSERT INTO task_activities(id,task_id,agent_id,activity_type,message) VALUES('a','close','worker','completed','done')");db.run("INSERT INTO task_activities(id,task_id,agent_id,activity_type,message) VALUES('a-verify','close','reviewer','verification_passed','gates passed')");
   add('prereq','in_progress');add('dependent','pending_dispatch');db.run("INSERT INTO task_dependencies(task_id,depends_on_task_id) VALUES('dependent','prereq')");
@@ -21,7 +23,8 @@ test('classifies complete lifecycle and produces idempotent dry-run actions',asy
   add('blocked','blocked','worker','test failure');
   const first=await controller.runCompletionScan('dry_run',new Date(t0.getTime()+60_000));assert.equal(first.status,'completed');if(first.status!=='completed')return;
   const byId=Object.fromEntries(first.decisions.map(d=>[d.taskId,d]));
-  assert.equal(byId.healthy.classification,'healthy_running');assert.equal(byId.missing.action,'dispatch');assert.equal(byId.stalled.classification,'stalled');
+  assert.equal(byId.healthy.classification,'healthy_running');assert.equal(byId.missing.action,'dispatch');assert.equal(byId.stalled.classification,'stalled');assert.equal(byId.reactivated.action,'dispatch');
+  assert.equal(byId['completed-run-review'].classification,'awaiting_verification');assert.equal(byId['completed-run-review'].action,'oracle_review');
   assert.equal(byId.parked.classification,'awaiting_agent');assert.equal(byId.parked.action,undefined);
   assert.equal(byId.verify.action,'request_verification');assert.equal(byId.close.action,'close');assert.equal(byId.dependent.classification,'awaiting_dependency');
   assert.equal(byId.human.authority,'michael');assert.equal(byId.blocked.authority,'oracle');
