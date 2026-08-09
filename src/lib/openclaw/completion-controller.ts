@@ -4,8 +4,9 @@ import { dispatchTaskToGateway } from './dispatch';
 import { getOpenClawClient } from './client';
 import { releaseReadyDependentTasks } from '@/lib/task-dependencies';
 import { drainMattermostOutbox,queueMattermostMilestone } from './mattermost-task-updates';
+import { evaluateCompletionContract } from '@/lib/completion-contract';
 
-export const CONTROLLER_INTERVAL_MS=30*60_000;
+export const CONTROLLER_INTERVAL_MS=90*60_000;
 const LEASE_MS=75_000;
 const MAX_ACTION_ATTEMPTS=2;
 const ACTION_LEASE_MS=60_000;
@@ -50,6 +51,7 @@ export function classifyTask(task:TaskRow,now=new Date()):Decision{
   const objectiveEvidence=queryOne<{count:number}>("SELECT COUNT(*) AS count FROM task_activities WHERE task_id=? AND activity_type IN ('verification_passed','completion_contract_passed','test_passed')",[task.id])?.count||0;
   const latestVerification=queryOne<{activity_type:string;message:string}>("SELECT activity_type,message FROM task_activities WHERE task_id=? AND activity_type IN ('verification_failed','verification_passed','completion_contract_passed','test_passed') ORDER BY created_at DESC,id DESC LIMIT 1",[task.id]);
   const independentVerifier=queryOne<{agent_id:string;role:string}>("SELECT agent_id,role FROM task_roles WHERE task_id=? AND role IN ('tester','reviewer','verifier') AND agent_id!=COALESCE(?, '') LIMIT 1",[task.id,task.assigned_agent_id]);
+  const contract=evaluateCompletionContract(task.id,now);
   const ageMs=now.getTime()-Date.parse(task.updated_at);
   let classification:CompletionClassification,reason:string,action:string|undefined,authority:Authority='controller';
   if(dependencies.some(dep=>dep.status!=='done')){classification='awaiting_dependency';reason='One or more prerequisite tasks are non-terminal';}
@@ -63,11 +65,12 @@ export function classifyTask(task:TaskRow,now=new Date()):Decision{
   else if(task.status==='blocked'){classification='blocked';reason=task.status_reason||'Task is intentionally blocked';action='oracle_review';authority='oracle';}
   else if(['testing','verification','review'].includes(task.status)&&latestVerification?.activity_type==='verification_failed'){classification='failed';reason=`Verification failed: ${latestVerification.message}`;action='return_rework';authority='specialist';}
   else if(['testing','verification','review'].includes(task.status)&&independentVerifier&&objectiveEvidence===0){classification='awaiting_verification';reason=`Independent ${independentVerifier.role} is required by task roles`;action='request_verification';authority='verifier';}
-  else if(['testing','verification','review'].includes(task.status)&&deliverables>0&&completionEvidence>0&&objectiveEvidence>0){classification='ready_to_close';reason='Objective completion contract, completion activity, and deliverable evidence all exist';action='close';authority='controller';}
-  else if(['testing','verification','review'].includes(task.status)){classification='awaiting_verification';reason='Completion contract lacks deliverable or completion evidence';action='oracle_review';authority='oracle';}
+  else if(['testing','verification','review'].includes(task.status)&&contract.required&&!contract.ready){classification='awaiting_verification';reason=`Completion contract is incomplete: ${contract.reasons.join('; ')}`;action='oracle_review';authority='oracle';}
+  else if(['testing','verification','review'].includes(task.status)&&deliverables>0&&completionEvidence>0&&objectiveEvidence>0){classification='ready_to_close';reason=contract.exists?'Every acceptance criterion and protected boundary has current evidence; completion report and objective evidence exist':'Legacy objective completion activity and deliverable evidence exist';action='close';authority='controller';}
+  else if(['testing','verification','review'].includes(task.status)){classification='awaiting_verification';reason='Completion lacks deliverable, completion activity, or objective verification evidence';action='oracle_review';authority='oracle';}
   else if(ageMs>7*24*3600_000&&!task.assigned_agent_id){classification='abandoned';reason='Unowned non-terminal task has not changed for seven days';action='oracle_review';authority='oracle';}
   else {classification='awaiting_agent';reason='No valid automatic transition is available';action='oracle_review';authority='oracle';}
-  const evidence={status:task.status,executionState:execution?.state||null,leaseExpiresAt:execution?.lease_expires_at||null,deliverables,completionEvidence,objectiveEvidence,dependencies:dependencies.length,independentVerifier:independentVerifier?.agent_id||null,updatedAt:task.updated_at};
+  const evidence={status:task.status,executionState:execution?.state||null,leaseExpiresAt:execution?.lease_expires_at||null,deliverables,completionEvidence,objectiveEvidence,completionContract:{exists:contract.exists,required:contract.required,ready:contract.ready,reasons:contract.reasons},dependencies:dependencies.length,independentVerifier:independentVerifier?.agent_id||null,updatedAt:task.updated_at};
   return{taskId:task.id,classification,reason,action,authority,evidence,fingerprint:stable({classification,reason,action,authority,evidence})};
 }
 
@@ -103,6 +106,8 @@ async function executeAction(decision:Decision,actionId:string,owner:string,now:
     if(decision.action==='dispatch'){
       const result=await dispatchTaskToGateway(decision.taskId); if(!result.success)throw new Error(result.error||'Dispatch failed');
     }else if(decision.action==='close'){
+      const contract=evaluateCompletionContract(decision.taskId,now);
+      if(contract.required&&!contract.ready)throw new Error(`Completion contract changed before close: ${contract.reasons.join('; ')}`);
       run("UPDATE tasks SET status='done',updated_at=? WHERE id=? AND status IN ('review','verification','testing')",[now.toISOString(),decision.taskId]);
       releaseReadyDependentTasks(decision.taskId);
     }else{

@@ -6,6 +6,7 @@ import { CreateTaskSchema } from '@/lib/validation';
 import { populateTaskRolesFromAgents } from '@/lib/workflow-engine';
 import { getMissionControlUrl } from '@/lib/config';
 import { releaseReadyDependentTasks } from '@/lib/task-dependencies';
+import { createCompletionContract } from '@/lib/completion-contract';
 import type { Task, CreateTaskRequest, Agent } from '@/lib/types';
 
 // GET /api/tasks - List all tasks with optional filters
@@ -187,6 +188,13 @@ export async function POST(request: NextRequest) {
         now,
       ]
     );
+
+    createCompletionContract(id,validatedData.completion_contract||{
+      acceptance_criteria:[`Complete the stated objective for “${validatedData.title}” and satisfy every requirement in the task brief.`],
+      protected_boundaries:['Remain within the task authority and preserve all explicit safety, privacy, financial, production, and destructive-action boundaries.'],
+      verification_max_age_minutes:1440,
+      required:true,
+    },new Date(now));
 
     for (const dependencyId of dependencyIds) {
       run(

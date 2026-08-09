@@ -1142,6 +1142,59 @@ const migrations: Migration[] = [
           ON mattermost_task_update_outbox(task_id,milestone,created_at DESC);
       `);
     }
+  },
+  {
+    id: '036',
+    name: 'add_task_completion_contracts',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS task_completion_contracts (
+          task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+          required INTEGER NOT NULL DEFAULT 1,
+          verification_max_age_minutes INTEGER NOT NULL DEFAULT 1440,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS task_acceptance_criteria (
+          id TEXT PRIMARY KEY,
+          task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+          description TEXT NOT NULL,
+          sort_order INTEGER NOT NULL DEFAULT 0,
+          status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','passed','waived')),
+          evidence TEXT,
+          verified_at TEXT,
+          verifier_agent_id TEXT REFERENCES agents(id),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS task_protected_boundaries (
+          id TEXT PRIMARY KEY,
+          task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+          description TEXT NOT NULL,
+          sort_order INTEGER NOT NULL DEFAULT 0,
+          status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','intact','violated','waived')),
+          evidence TEXT,
+          verified_at TEXT,
+          verifier_agent_id TEXT REFERENCES agents(id),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS task_completion_reports (
+          task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+          plan_vs_actual TEXT NOT NULL,
+          deviations TEXT NOT NULL DEFAULT '[]',
+          deferred_work TEXT NOT NULL DEFAULT '[]',
+          verification_commands TEXT NOT NULL DEFAULT '[]',
+          verification_ran_at TEXT NOT NULL,
+          next_action TEXT NOT NULL,
+          submitted_by_agent_id TEXT REFERENCES agents(id),
+          submitted_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_acceptance_criteria_task ON task_acceptance_criteria(task_id,sort_order);
+        CREATE INDEX IF NOT EXISTS idx_protected_boundaries_task ON task_protected_boundaries(task_id,sort_order);
+      `);
+    }
   }
 ];
 

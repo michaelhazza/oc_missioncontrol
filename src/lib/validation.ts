@@ -38,6 +38,25 @@ const ActivityType = z.enum([
 
 const DeliverableType = z.enum(['file', 'url', 'artifact']);
 
+export const CompletionContractSchema = z.object({
+  acceptance_criteria: z.array(z.string().trim().min(1).max(2000)).min(1).max(50),
+  protected_boundaries: z.array(z.string().trim().min(1).max(2000)).max(50).optional(),
+  verification_max_age_minutes: z.number().int().min(1).max(10080).optional(),
+  required: z.boolean().optional(),
+});
+
+export const CompletionReportSchema = z.object({
+  criteria: z.array(z.object({id:z.string().uuid(),status:z.enum(['pending','passed','waived']),evidence:z.string().trim().min(1).max(10000),verified_at:z.string().datetime().optional(),verifier_agent_id:z.string().uuid().optional()})).max(50),
+  boundaries: z.array(z.object({id:z.string().uuid(),status:z.enum(['pending','intact','violated','waived']),evidence:z.string().trim().min(1).max(10000),verified_at:z.string().datetime().optional(),verifier_agent_id:z.string().uuid().optional()})).max(50),
+  plan_vs_actual: z.string().trim().min(1).max(20000),
+  deviations: z.array(z.string().trim().min(1).max(5000)).max(50),
+  deferred_work: z.array(z.string().trim().min(1).max(5000)).max(50),
+  verification_commands: z.array(z.object({command:z.string().trim().min(1).max(2000),exit_code:z.number().int(),output_summary:z.string().trim().min(1).max(10000)})).min(1).max(50),
+  verification_ran_at: z.string().datetime(),
+  next_action: z.string().trim().min(1).max(5000),
+  submitted_by_agent_id: z.string().uuid().optional(),
+});
+
 // Task validation schemas
 export const CreateTaskSchema = z.object({
   title: z.string().min(1, 'Title is required').max(500, 'Title must be 500 characters or less'),
@@ -59,6 +78,7 @@ export const CreateTaskSchema = z.object({
   mattermost_source_post_id: z.string().max(128).optional(),
   mattermost_thread_url: z.string().url().max(2000).optional(),
   depends_on_task_ids: z.array(z.string().uuid()).max(50).optional(),
+  completion_contract: CompletionContractSchema.optional(),
 }).superRefine((task,ctx)=>{
   if(Boolean(task.mattermost_channel_id)!==Boolean(task.mattermost_root_post_id))ctx.addIssue({code:z.ZodIssueCode.custom,path:['mattermost_root_post_id'],message:'Mattermost task origin requires both channel and root post IDs'});
 });

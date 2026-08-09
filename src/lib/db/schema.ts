@@ -320,6 +320,55 @@ CREATE TABLE IF NOT EXISTS task_deliverables (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
+-- Criteria-level completion contracts. Existing tasks without a contract retain
+-- the legacy completion path; every newly created task receives a contract.
+CREATE TABLE IF NOT EXISTS task_completion_contracts (
+  task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+  required INTEGER NOT NULL DEFAULT 1,
+  verification_max_age_minutes INTEGER NOT NULL DEFAULT 1440,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS task_acceptance_criteria (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  description TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','passed','waived')),
+  evidence TEXT,
+  verified_at TEXT,
+  verifier_agent_id TEXT REFERENCES agents(id),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS task_protected_boundaries (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  description TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','intact','violated','waived')),
+  evidence TEXT,
+  verified_at TEXT,
+  verifier_agent_id TEXT REFERENCES agents(id),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS task_completion_reports (
+  task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+  plan_vs_actual TEXT NOT NULL,
+  deviations TEXT NOT NULL DEFAULT '[]',
+  deferred_work TEXT NOT NULL DEFAULT '[]',
+  verification_commands TEXT NOT NULL DEFAULT '[]',
+  verification_ran_at TEXT NOT NULL,
+  next_action TEXT NOT NULL,
+  submitted_by_agent_id TEXT REFERENCES agents(id),
+  submitted_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 -- Workspace settings (per-workspace integration configuration)
 CREATE TABLE IF NOT EXISTS workspace_settings (
   id TEXT PRIMARY KEY,
@@ -338,6 +387,8 @@ CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_assigned ON tasks(assigned_agent_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_workspace ON tasks(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_task_dependencies_prerequisite ON task_dependencies(depends_on_task_id);
+CREATE INDEX IF NOT EXISTS idx_acceptance_criteria_task ON task_acceptance_criteria(task_id,sort_order);
+CREATE INDEX IF NOT EXISTS idx_protected_boundaries_task ON task_protected_boundaries(task_id,sort_order);
 CREATE INDEX IF NOT EXISTS idx_agents_workspace ON agents(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at DESC);

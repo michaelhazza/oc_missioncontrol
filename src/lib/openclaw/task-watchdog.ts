@@ -21,7 +21,7 @@ async function deliver(action:RecoveryAction):Promise<void>{
   await client.call('chat.send',{
     sessionKey,
     idempotencyKey:action.recoveryKey,
-    message:`Oracle recovery escalation: task ${action.run.task_id}, execution ${action.run.id}, is stalled after bounded automatic recovery. Inspect Mission Control evidence, acknowledge the incident, and either reassign through the execution recovery API or leave it stalled with a specific diagnosis. Do not create an untracked worker.`,
+    message:`Oracle recovery escalation: task ${action.run.task_id}, execution ${action.run.id}, is stalled after bounded automatic recovery. Inspect Mission Control evidence, acknowledge the incident, and either reassign through the execution recovery API or leave it stalled with a specific diagnosis. Do not create an untracked worker. Remain silent in the originating Mattermost thread unless recovery needs a decision from Michael; routine recovery belongs only in Mission Control.`,
   });
 }
 

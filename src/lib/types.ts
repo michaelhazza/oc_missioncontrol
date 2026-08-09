@@ -381,6 +381,12 @@ export interface CreateTaskRequest {
   mattermost_source_post_id?: string;
   mattermost_thread_url?: string;
   depends_on_task_ids?: string[];
+  completion_contract?: {
+    acceptance_criteria:string[];
+    protected_boundaries?:string[];
+    verification_max_age_minutes?:number;
+    required?:boolean;
+  };
 }
 
 export interface UpdateTaskRequest extends Partial<CreateTaskRequest> {

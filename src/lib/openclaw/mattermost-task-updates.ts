@@ -8,6 +8,10 @@ const MAX_ATTEMPTS=3;
 const CLAIM_MS=60_000;
 const COOLDOWN_MS=15*60_000;
 
+// Mission Control never speaks in task threads. The assigned owner communicates
+// material outcomes; all controller/recovery lifecycle stays in the activity log.
+const userVisibleMilestones=new Set<string>();
+
 interface TaskDestination{id:string;title:string;mattermost_channel_id:string|null;mattermost_root_post_id:string|null}
 export interface MilestoneDelivery{id:string;task_id:string;action_key:string;milestone:string;channel_id:string;root_post_id:string;message:string;state:string;attempts:number;not_before:string|null;claim_owner:string|null;claim_expires_at:string|null}
 
@@ -22,6 +26,7 @@ const semanticMessages:Record<string,(title:string,detail:string)=>string>={
 };
 
 export function queueMattermostMilestone(taskId:string,milestone:keyof typeof semanticMessages,detail:string,actionKey:string,now=new Date()):MilestoneDelivery|null{
+  if(!userVisibleMilestones.has(milestone))return null;
   return transaction(()=>{
     const task=queryOne<TaskDestination>('SELECT id,title,mattermost_channel_id,mattermost_root_post_id FROM tasks WHERE id=?',[taskId]);
     if(!task?.mattermost_channel_id||!task.mattermost_root_post_id)return null;
@@ -48,7 +53,7 @@ export function parseProviderMessageId(stdout:string):string|undefined{
 export async function drainMattermostOutbox(now=new Date(),sender=defaultMattermostSender):Promise<{delivered:number;failed:number}>{
   const owner=`mattermost:${randomUUID()}`,iso=now.toISOString();
   run("UPDATE mattermost_task_update_outbox SET state='pending',claim_owner=NULL,claim_expires_at=NULL WHERE state='delivering' AND claim_expires_at<=?",[iso]);
-  const ids=queryAll<{id:string}>("SELECT id FROM mattermost_task_update_outbox WHERE state='pending' AND attempts<? AND (not_before IS NULL OR not_before<=?) ORDER BY created_at",[MAX_ATTEMPTS,iso]);
+  const ids=queryAll<{id:string}>("SELECT id FROM mattermost_task_update_outbox WHERE state='pending' AND 0=1 AND attempts<? AND (not_before IS NULL OR not_before<=?) ORDER BY created_at",[MAX_ATTEMPTS,iso]);
   let delivered=0,failed=0;
   for(const row of ids){
     const claim=run(`UPDATE mattermost_task_update_outbox SET state='delivering',claim_owner=?,claim_expires_at=?,attempts=attempts+1,updated_at=? WHERE id=? AND state='pending'`,[owner,new Date(now.getTime()+CLAIM_MS).toISOString(),iso,row.id]);
