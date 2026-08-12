@@ -8,10 +8,15 @@ import { getDb } from '@/lib/db';
 import { broadcast } from '@/lib/events';
 import { CreateDeliverableSchema } from '@/lib/validation';
 import { existsSync } from 'fs';
+import { normalizeStoredTimestamp } from '@/lib/timestamps';
 
 import type { TaskDeliverable } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
+
+function serializeDeliverable(deliverable: TaskDeliverable): TaskDeliverable {
+  return {...deliverable,created_at:normalizeStoredTimestamp(deliverable.created_at)};
+}
 /**
  * GET /api/tasks/[id]/deliverables
  * Retrieve all deliverables for a task
@@ -31,7 +36,7 @@ export async function GET(
       ORDER BY created_at DESC
     `).all(taskId) as TaskDeliverable[];
 
-    return NextResponse.json(deliverables);
+    return NextResponse.json(deliverables.map(serializeDeliverable));
   } catch (error) {
     console.error('Error fetching deliverables:', error);
     return NextResponse.json(
@@ -81,23 +86,25 @@ export async function POST(
 
     // Insert deliverable
     db.prepare(`
-      INSERT INTO task_deliverables (id, task_id, deliverable_type, title, path, description)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO task_deliverables (id, task_id, deliverable_type, title, path, description, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       taskId,
       deliverable_type,
       title,
       path || null,
-      description || null
+      description || null,
+      new Date().toISOString()
     );
 
     // Get the created deliverable
-    const deliverable = db.prepare(`
+    const storedDeliverable = db.prepare(`
       SELECT *
       FROM task_deliverables
       WHERE id = ?
     `).get(id) as TaskDeliverable;
+    const deliverable = serializeDeliverable(storedDeliverable);
 
     // Broadcast to SSE clients
     broadcast({

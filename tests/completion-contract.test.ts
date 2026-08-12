@@ -4,10 +4,10 @@ import fs from 'node:fs';import os from 'node:os';import path from 'node:path';
 
 const dir=fs.mkdtempSync(path.join(os.tmpdir(),'mc-contract-'));
 process.env.DATABASE_PATH=path.join(dir,'db.sqlite');process.env.OPENCLAW_WEBHOOK_SECRET='test';
-let db:typeof import('../src/lib/db');let contracts:typeof import('../src/lib/completion-contract');let controller:typeof import('../src/lib/openclaw/completion-controller');
+let db:typeof import('../src/lib/db');let contracts:typeof import('../src/lib/completion-contract');let controller:typeof import('../src/lib/openclaw/completion-controller');let timestamps:typeof import('../src/lib/timestamps');
 const now=new Date('2026-08-08T20:00:00.000Z');
 
-before(async()=>{db=await import('../src/lib/db');contracts=await import('../src/lib/completion-contract');controller=await import('../src/lib/openclaw/completion-controller');
+before(async()=>{db=await import('../src/lib/db');contracts=await import('../src/lib/completion-contract');controller=await import('../src/lib/openclaw/completion-controller');timestamps=await import('../src/lib/timestamps');
   db.run("INSERT OR IGNORE INTO agents(id,name,role) VALUES('worker','Worker','specialist')");
   db.run("INSERT INTO tasks(id,title,status,assigned_agent_id,workspace_id,updated_at) VALUES('task','Contract task','review','worker','default',?)",[now.toISOString()]);
   db.run("INSERT INTO task_deliverables(id,task_id,deliverable_type,title,created_at) VALUES('deliverable','task','file','artifact',?)",[new Date(now.getTime()-60_000).toISOString()]);
@@ -50,4 +50,52 @@ test('a violated boundary and stale verification each fail closed',()=>{
 test('legacy tasks without contracts remain backward compatible',()=>{
   db.run("INSERT INTO tasks(id,title,status,workspace_id,updated_at) VALUES('legacy','Legacy','review','default',?)",[now.toISOString()]);
   assert.deepEqual(contracts.evaluateCompletionContract('legacy',now),{exists:false,required:false,ready:true,reasons:[]});
+});
+
+test('timezone-less SQLite timestamps are UTC while explicit offsets are preserved',()=>{
+  assert.equal(timestamps.parseStoredTimestamp('2026-08-08 19:59:00'),Date.parse('2026-08-08T19:59:00Z'));
+  assert.equal(timestamps.parseStoredTimestamp('2026-08-08T19:59:00Z'),Date.parse('2026-08-08T19:59:00Z'));
+  assert.equal(timestamps.parseStoredTimestamp('2026-08-08T12:59:00-07:00'),Date.parse('2026-08-08T12:59:00-07:00'));
+  assert.equal(timestamps.normalizeStoredTimestamp('2026-08-08 19:59:00'),'2026-08-08T19:59:00.000Z');
+  assert.equal(timestamps.normalizeStoredTimestamp('invalid'),'invalid');
+});
+
+function addContractTask(id:string,deliverableAt:string){
+  db.run('INSERT INTO tasks(id,title,status,assigned_agent_id,workspace_id,updated_at) VALUES(?,?,\'review\',\'worker\',\'default\',?)',[id,id,now.toISOString()]);
+  db.run('INSERT INTO task_deliverables(id,task_id,deliverable_type,title,created_at) VALUES(?,?,\'file\',\'artifact\',?)',[`${id}-deliverable`,id,deliverableAt]);
+  return contracts.createCompletionContract(id,{acceptance_criteria:['Artifact verified'],protected_boundaries:['No mutation']},new Date(now.getTime()-120_000)) as any;
+}
+
+function reportFor(snapshot:any,verificationAt:string){
+  return {
+    criteria:snapshot.criteria.map((item:any)=>({id:item.id,status:'passed' as const,evidence:'verified'})),
+    boundaries:snapshot.boundaries.map((item:any)=>({id:item.id,status:'intact' as const,evidence:'intact'})),
+    plan_vs_actual:'Plan matched actual.',deviations:[],deferred_work:[],
+    verification_commands:[{command:'focused test',exit_code:0,output_summary:'passed'}],
+    verification_ran_at:verificationAt,next_action:'None — task complete',submitted_by_agent_id:'worker',
+  };
+}
+
+test('legacy SQLite deliverable timestamps preserve correct verification ordering',()=>{
+  const valid=addContractTask('legacy-sqlite-time','2026-08-08 19:59:00');
+  assert.equal(contracts.submitCompletionReport('legacy-sqlite-time',reportFor(valid,now.toISOString()),now).ready,true);
+
+  const early=addContractTask('early-verification','2026-08-08 19:59:00');
+  const result=contracts.submitCompletionReport('early-verification',reportFor(early,'2026-08-08T19:58:30Z'),now) as any;
+  assert.equal(result.ready,false);
+  assert.ok(result.reasons.includes('Verification predates the latest deliverable'));
+});
+
+test('future verification timestamps still fail closed',()=>{
+  const snapshot=addContractTask('future-verification','2026-08-08 19:59:00');
+  const result=contracts.submitCompletionReport('future-verification',reportFor(snapshot,'2026-08-08T20:02:00Z'),now) as any;
+  assert.equal(result.ready,false);
+  assert.ok(result.reasons.includes('Verification evidence is stale or has an invalid timestamp'));
+});
+
+test('invalid persisted deliverable timestamps fail closed',()=>{
+  const snapshot=addContractTask('invalid-deliverable-time','invalid');
+  const result=contracts.submitCompletionReport('invalid-deliverable-time',reportFor(snapshot,now.toISOString()),now) as any;
+  assert.equal(result.ready,false);
+  assert.ok(result.reasons.includes('Verification predates the latest deliverable'));
 });

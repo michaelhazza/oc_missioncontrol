@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { queryAll, queryOne, run, transaction } from '@/lib/db';
+import { parseStoredTimestamp } from '@/lib/timestamps';
 
 export type CriterionStatus='pending'|'passed'|'waived';
 export type BoundaryStatus='pending'|'intact'|'violated'|'waived';
@@ -82,7 +83,8 @@ export function evaluateCompletionContract(taskId:string,now=new Date()){
     const ranAt=Date.parse(report.verification_ran_at);
     if(!Number.isFinite(ranAt)||now.getTime()-ranAt>contract.verification_max_age_minutes*60_000||ranAt>now.getTime()+60_000)reasons.push('Verification evidence is stale or has an invalid timestamp');
     const latestDeliverable=queryOne<{created_at:string}>('SELECT created_at FROM task_deliverables WHERE task_id=? ORDER BY created_at DESC LIMIT 1',[taskId]);
-    if(latestDeliverable&&ranAt<Date.parse(latestDeliverable.created_at))reasons.push('Verification predates the latest deliverable');
+    const deliverableAt=latestDeliverable?parseStoredTimestamp(latestDeliverable.created_at):Number.NaN;
+    if(latestDeliverable&&(!Number.isFinite(deliverableAt)||ranAt<deliverableAt))reasons.push('Verification predates the latest deliverable');
   }
   return{exists:true,required:Boolean(contract.required),ready:!contract.required||reasons.length===0,reasons,criteria,boundaries,report:report?{...report,deviations:JSON.parse(report.deviations),deferred_work:JSON.parse(report.deferred_work),verification_commands:JSON.parse(report.verification_commands)}:null};
 }
