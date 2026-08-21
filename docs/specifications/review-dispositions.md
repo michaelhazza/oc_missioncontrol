@@ -16,7 +16,7 @@ Status: complete. Both independent reviews are preserved and all material findin
 
 ## Claude Code review
 
-The repaired tool-free background gate returned `CHANGES_REQUIRED`. All material findings were accepted: a current completion-review pointer/CAS contract, canonical exception fingerprints, one `decision_version` name, an `authority_scope` domain, an explicit partial-index predicate, and application/transaction validation ownership for CEO decisions. The date observation was rejected because 2026-08-21 is the execution date in UTC/Sydney.
+The repaired tool-free background gate initially returned `CHANGES_REQUIRED`. All material findings were accepted and remediated: lineage uniqueness/schema, deterministic provider-event and brief-revision identity, lease-fenced intake recovery, workspace scoping, exception recurrence/concurrency/routing/authority, evidence freshness, invalidation and guarded currency, synthesis versioning, and explicit human-decision routing. The final independent re-review returned `VERDICT: READY` with no material blockers; its four non-blocking clarifications were also incorporated.
 
 ## ChatGPT review
 

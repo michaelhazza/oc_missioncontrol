@@ -1,7 +1,9 @@
-# ChatGPT independent review — raw result
+# ChatGPT independent review — terminal result
 
-Date: 2026-08-21
+Date: 2026-08-21. Authenticated persistent profile: `user` mapped to managed `openclaw` backing profile. Project: `Automation V1`.
 
-No review content was produced. The authenticated ChatGPT workspace was reachable, but the required same-named `mission-control` Project was not present. No substitute project was used and no new project was created because that would change external state beyond this specification task.
+Conversation: https://chatgpt.com/g/g-p-6a87ce86ce488191a8c1813b2b127404-automation-v1/c/6a87f33f-a018-83ec-b6dc-c540eadb1d6c
 
-This is a failed review gate, not a positive review.
+Verdict: **CHANGES_REQUIRED**, then fully dispositioned.
+
+Material findings were tenant-safe Mattermost uniqueness, atomic exception supersession/current-row invariants, task/workspace binding in completion digests, and an undefined operator-alert delivery authority. All four were accepted and incorporated into the canonical specification. See `chatgpt-three-features-review-2026-08-21.md` for the preserved response.

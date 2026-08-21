@@ -14,7 +14,9 @@
 
 ## Verification and residual risk
 
-- `npm test`: 16/16 passing, covering read-only allowlists, blocked out-of-root access, genuine final output, reason codes, exact-profile recovery and non-recoverable mismatch.
+- `npm run test:review-gates`: 14/14 passing. Integration tests execute `runClaudeReadOnlyReview` through a real background child process, prove terminal verdict preservation, and prove a disallowed source is rejected before process launch. Browser integration tests exercise bounded start/recheck, tab/Project discovery, stale-tab reopen, restart recovery, preserved-result idempotency, and fail-closed exhaustion.
+- `npm run test:execution`: 31/31 passing.
+- Final Claude envelope: terminal `VERDICT: READY`, session `e95ecdc8-8c86-4c63-b2b4-d764f5f97285`, preserved in `claude-code-review-raw.md`.
 - Browser live proof: managed profile status reported `running=true`, `cdpReady=true`, `pageReady=true`; fresh Automation V1 conversation URL is recorded in the raw review.
 - Human action remains required only for genuine login, 2FA, CAPTCHA or ambiguous account/Project. UI-selector changes remain an operational risk, contained by readiness diagnostics and fail-closed behavior.
 - No product features, deployment, merge, credential changes, public exposure or broad unattended permissions were introduced.
