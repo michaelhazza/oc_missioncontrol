@@ -114,6 +114,10 @@ export async function PATCH(
       updates.push('brief = ?');
       values.push(validatedData.brief);
     }
+    if (validatedData.status_reason !== undefined) {
+      updates.push('status_reason = ?');
+      values.push(validatedData.status_reason);
+    }
     for (const field of [
       'mattermost_channel_id',
       'mattermost_root_post_id',

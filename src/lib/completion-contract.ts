@@ -20,6 +20,9 @@ export function createCompletionContract(taskId:string,input:CompletionContractI
   const boundaries=(input.protected_boundaries||[]).map(value=>value.trim()).filter(Boolean);
   if(criteria.length===0)throw new Error('At least one acceptance criterion is required');
   transaction(()=>{
+    const previous=queryOne<{current_completion_review_id:string|null}>('SELECT current_completion_review_id FROM tasks WHERE id=?',[taskId]);
+    if(previous?.current_completion_review_id)run('UPDATE completion_reviews SET current_synthesis_id=NULL WHERE id=?',[previous.current_completion_review_id]);
+    run('UPDATE tasks SET evidence_version=evidence_version+1,current_completion_review_id=NULL,updated_at=? WHERE id=?',[stamp,taskId]);
     run(`INSERT INTO task_completion_contracts(task_id,required,verification_max_age_minutes,created_at,updated_at)
       VALUES(?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET required=excluded.required,verification_max_age_minutes=excluded.verification_max_age_minutes,updated_at=excluded.updated_at`,
       [taskId,input.required===false?0:1,input.verification_max_age_minutes||1440,stamp,stamp]);
@@ -43,6 +46,9 @@ export function submitCompletionReport(taskId:string,input:CompletionReportInput
   if(input.verification_commands.length===0)throw new Error('At least one fresh verification command is required');
   if(!Number.isFinite(Date.parse(input.verification_ran_at)))throw new Error('verification_ran_at must be a valid timestamp');
   transaction(()=>{
+    const previous=queryOne<{current_completion_review_id:string|null}>('SELECT current_completion_review_id FROM tasks WHERE id=?',[taskId]);
+    if(previous?.current_completion_review_id)run('UPDATE completion_reviews SET current_synthesis_id=NULL WHERE id=?',[previous.current_completion_review_id]);
+    run('UPDATE tasks SET evidence_version=evidence_version+1,current_completion_review_id=NULL,updated_at=? WHERE id=?',[stamp,taskId]);
     for(const item of input.criteria){
       if(!item.evidence.trim())throw new Error('Criterion evidence is required');
       run('UPDATE task_acceptance_criteria SET status=?,evidence=?,verified_at=?,verifier_agent_id=?,updated_at=? WHERE id=? AND task_id=?',[item.status,item.evidence.trim(),item.verified_at||input.verification_ran_at,item.verifier_agent_id||input.submitted_by_agent_id||null,stamp,item.id,taskId]);

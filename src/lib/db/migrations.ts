@@ -1195,6 +1195,104 @@ const migrations: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_protected_boundaries_task ON task_protected_boundaries(task_id,sort_order);
       `);
     }
+  },
+  {
+    id: '037',
+    name: 'restore_blocked_task_status_after_table_recreation',
+    up: (db) => {
+      const taskSchema = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='tasks'").get() as { sql: string } | undefined;
+      if (taskSchema?.sql.match(/status\s+TEXT[\s\S]*?CHECK\s*\(status IN \([^)]*'blocked'/)) return;
+      const cols = (db.prepare('PRAGMA table_info(tasks)').all() as { name: string }[]).map(column => column.name);
+      const colList = cols.join(', ');
+      db.exec('ALTER TABLE tasks RENAME TO _tasks_old_037');
+      db.exec(`CREATE TABLE tasks (
+        id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT,
+        status TEXT DEFAULT 'inbox' CHECK (status IN ('pending_dispatch','planning','inbox','assigned','in_progress','testing','review','verification','blocked','done')),
+        priority TEXT DEFAULT 'normal' CHECK (priority IN ('low','normal','high','urgent')),
+        assigned_agent_id TEXT REFERENCES agents(id), created_by_agent_id TEXT REFERENCES agents(id),
+        workspace_id TEXT DEFAULT 'default' REFERENCES workspaces(id), business_id TEXT DEFAULT 'default', due_date TEXT,
+        workflow_template_id TEXT REFERENCES workflow_templates(id), planning_session_key TEXT, planning_messages TEXT,
+        planning_complete INTEGER DEFAULT 0, planning_spec TEXT, planning_agents TEXT, planning_dispatch_error TEXT,
+        status_reason TEXT, created_at TEXT DEFAULT (datetime('now')), updated_at TEXT DEFAULT (datetime('now')),
+        brief TEXT, trigger_type TEXT, trigger_source TEXT, gateway_task_id TEXT,
+        sync_status TEXT DEFAULT 'local' CHECK (sync_status IN ('local','synced','pending_sync','sync_failed')),
+        retry_count INTEGER DEFAULT 0, last_sync_attempt TEXT, gateway_completion_notes TEXT, cron_job_id TEXT,
+        correlation_id TEXT, mattermost_channel_id TEXT, mattermost_root_post_id TEXT, mattermost_source_post_id TEXT,
+        mattermost_thread_url TEXT
+      )`);
+      db.exec(`INSERT INTO tasks (${colList}) SELECT ${colList} FROM _tasks_old_037`);
+      db.exec('DROP TABLE _tasks_old_037');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status); CREATE INDEX IF NOT EXISTS idx_tasks_assigned ON tasks(assigned_agent_id); CREATE INDEX IF NOT EXISTS idx_tasks_workspace ON tasks(workspace_id); CREATE INDEX IF NOT EXISTS idx_tasks_sync_status ON tasks(sync_status); CREATE INDEX IF NOT EXISTS idx_tasks_gateway_task_id ON tasks(gateway_task_id); CREATE INDEX IF NOT EXISTS idx_tasks_cron_job_id ON tasks(cron_job_id); CREATE INDEX IF NOT EXISTS idx_tasks_correlation_id ON tasks(correlation_id); CREATE INDEX IF NOT EXISTS idx_tasks_mattermost_root ON tasks(mattermost_channel_id,mattermost_root_post_id)');
+    }
+  },
+  {
+    id: '038',
+    name: 'three_high_leverage_operating_features',
+    up: (db) => {
+      const taskColumns = new Set((db.prepare('PRAGMA table_info(tasks)').all() as { name: string }[]).map(row => row.name));
+      const additions = [
+        ['mattermost_account_id', 'TEXT'], ['parent_task_id', 'TEXT REFERENCES tasks(id)'], ['lineage_id', 'TEXT'],
+        ['is_current_lineage_member', 'INTEGER NOT NULL DEFAULT 1'], ['deleted_at', 'TEXT'], ['commitment_due_at', 'TEXT'],
+        ['evidence_version', 'INTEGER NOT NULL DEFAULT 0'], ['current_completion_review_id', 'TEXT'],
+      ] as const;
+      for (const [name, definition] of additions) if (!taskColumns.has(name)) db.exec(`ALTER TABLE tasks ADD COLUMN ${name} ${definition}`);
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS task_intake_events (
+          id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, mattermost_account_id TEXT NOT NULL,
+          provider_event_id TEXT NOT NULL, sender_id TEXT NOT NULL, channel_id TEXT NOT NULL,
+          channel_type TEXT NOT NULL, root_post_id TEXT NOT NULL, source_post_id TEXT NOT NULL,
+          provider_created_at TEXT NOT NULL, provider_revision TEXT, event_kind TEXT NOT NULL,
+          payload_hash TEXT NOT NULL, received_at TEXT NOT NULL, candidate_state TEXT NOT NULL DEFAULT 'resolved',
+          candidate_reason TEXT, disposition TEXT NOT NULL, task_id TEXT REFERENCES tasks(id), error TEXT,
+          processed_at TEXT,
+          UNIQUE(workspace_id,mattermost_account_id,provider_event_id)
+        );
+        CREATE TABLE IF NOT EXISTS task_brief_revisions (
+          id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+          revision INTEGER NOT NULL, source_post_id TEXT NOT NULL, provider_created_at TEXT NOT NULL,
+          provider_revision TEXT, payload_hash TEXT NOT NULL, brief TEXT NOT NULL, created_at TEXT NOT NULL,
+          UNIQUE(task_id,revision), UNIQUE(task_id,payload_hash,source_post_id)
+        );
+        CREATE TABLE IF NOT EXISTS task_exceptions (
+          id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+          type TEXT NOT NULL, authority_scope TEXT NOT NULL, decision_version INTEGER NOT NULL,
+          supersedes_id TEXT, is_current INTEGER NOT NULL DEFAULT 1, severity TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'open', fingerprint TEXT NOT NULL UNIQUE, owner_agent_id TEXT,
+          impact TEXT NOT NULL, evidence_json TEXT NOT NULL, recommendation TEXT, decision_schema TEXT,
+          due_at TEXT, first_seen_at TEXT NOT NULL, last_seen_at TEXT NOT NULL, resolved_at TEXT,
+          UNIQUE(workspace_id,task_id,type,authority_scope,decision_version)
+        );
+        CREATE TABLE IF NOT EXISTS exception_actions (
+          id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, exception_id TEXT NOT NULL REFERENCES task_exceptions(id),
+          actor_principal_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, expected_decision_version INTEGER NOT NULL,
+          action TEXT NOT NULL, decision_value TEXT, created_at TEXT NOT NULL,
+          UNIQUE(workspace_id,actor_principal_id,idempotency_key)
+        );
+        CREATE TABLE IF NOT EXISTS completion_reviews (
+          id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+          evidence_version INTEGER NOT NULL, evidence_digest TEXT NOT NULL, freshness_policy_version TEXT NOT NULL,
+          freshness_boundary_at TEXT NOT NULL, freshness_boundary_epoch INTEGER NOT NULL, freshness_bucket TEXT NOT NULL,
+          reviewed_as_of TEXT NOT NULL, verdict TEXT NOT NULL, findings_json TEXT NOT NULL, reviewed_at TEXT NOT NULL,
+          reviewer_version TEXT NOT NULL, current_synthesis_id TEXT,
+          UNIQUE(workspace_id,task_id,evidence_digest,freshness_bucket)
+        );
+        CREATE TABLE IF NOT EXISTS executive_syntheses (
+          id TEXT PRIMARY KEY, review_id TEXT NOT NULL REFERENCES completion_reviews(id) ON DELETE CASCADE,
+          schema_version TEXT NOT NULL, generation_key TEXT NOT NULL, content_json TEXT NOT NULL,
+          model_identity TEXT NOT NULL, prompt_hash TEXT NOT NULL, created_at TEXT NOT NULL,
+          UNIQUE(review_id,schema_version,generation_key)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_current_mattermost_lineage
+          ON tasks(workspace_id,mattermost_account_id,mattermost_channel_id,mattermost_root_post_id)
+          WHERE deleted_at IS NULL AND is_current_lineage_member=1 AND mattermost_account_id IS NOT NULL
+            AND mattermost_channel_id IS NOT NULL AND mattermost_root_post_id IS NOT NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_task_exceptions_current_open
+          ON task_exceptions(workspace_id,task_id,type,authority_scope) WHERE is_current=1 AND status='open';
+        CREATE INDEX IF NOT EXISTS idx_task_intake_root ON task_intake_events(workspace_id,mattermost_account_id,channel_id,root_post_id);
+        CREATE INDEX IF NOT EXISTS idx_task_exceptions_ceo ON task_exceptions(workspace_id,status,is_current,severity,last_seen_at);
+        CREATE INDEX IF NOT EXISTS idx_completion_reviews_task ON completion_reviews(task_id,reviewed_at DESC);
+      `);
+    }
   }
 ];
 

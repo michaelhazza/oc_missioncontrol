@@ -1,0 +1,19 @@
+{
+  "id": "mission-control-intake",
+  "name": "Mission Control DM Intake",
+  "description": "Captures allowlisted inbound Mattermost DM threads in Mission Control.",
+  "activation": { "onStartup": true },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["endpoint", "secret", "workspaceId", "accountId", "senderId", "channelId"],
+    "properties": {
+      "endpoint": { "type": "string" },
+      "secret": { "type": "string" },
+      "workspaceId": { "type": "string" },
+      "accountId": { "type": "string" },
+      "senderId": { "type": "string" },
+      "channelId": { "type": "string" }
+    }
+  }
+}

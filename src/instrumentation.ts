@@ -19,6 +19,7 @@ export async function register() {
     const { startTaskWatchdog } = await import('./lib/openclaw/task-watchdog');
     const { startCompletionController } = await import('./lib/openclaw/completion-controller');
     const { syncConfiguredAgents, reconcileAgentStatuses } = await import('./lib/openclaw/agent-registry');
+    const { startOperatingFeatures } = await import('./lib/operating-features');
 
     // Initialise gateway connection (non-blocking — uses auto-reconnect)
     try {
@@ -49,6 +50,10 @@ export async function register() {
     // Deterministic lifecycle governance. Disabled by default; rollout begins
     // with MISSION_CONTROL_COMPLETION_CONTROLLER=dry_run.
     startCompletionController();
+
+    // Project decision/blocker/overdue exceptions continuously. Routine task
+    // progress remains absent from this projection by construction.
+    startOperatingFeatures();
 
     // Warn if OPENCLAW_WEBHOOK_SECRET is not set
     if (!process.env.OPENCLAW_WEBHOOK_SECRET) {

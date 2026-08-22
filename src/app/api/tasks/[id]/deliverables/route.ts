@@ -9,6 +9,7 @@ import { broadcast } from '@/lib/events';
 import { CreateDeliverableSchema } from '@/lib/validation';
 import { existsSync } from 'fs';
 import { normalizeStoredTimestamp } from '@/lib/timestamps';
+import { invalidateCompletionReview } from '@/lib/operating-features';
 
 import type { TaskDeliverable } from '@/lib/types';
 
@@ -97,6 +98,7 @@ export async function POST(
       description || null,
       new Date().toISOString()
     );
+    invalidateCompletionReview(taskId);
 
     // Get the created deliverable
     const storedDeliverable = db.prepare(`

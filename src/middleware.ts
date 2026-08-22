@@ -81,6 +81,12 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
+  // The intake route performs its own timestamped HMAC verification against a
+  // dedicated secret. Do not require the general API bearer token as well.
+  if (pathname === '/api/intake/mattermost') {
+    return NextResponse.next();
+  }
+
   // Demo mode: block all write operations
   if (DEMO_MODE) {
     const method = request.method.toUpperCase();
