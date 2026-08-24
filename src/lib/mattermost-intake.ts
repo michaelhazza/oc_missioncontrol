@@ -63,11 +63,30 @@ export function processMattermostInbound(event: MattermostInboundEvent, now = ne
 
   const result = transaction(() => {
     const db = getDb();
-    const task = db.prepare(`SELECT id,status FROM tasks WHERE workspace_id=? AND mattermost_account_id=? AND mattermost_channel_id=?
+    let task = db.prepare(`SELECT id,status FROM tasks WHERE workspace_id=? AND mattermost_account_id=? AND mattermost_channel_id=?
       AND mattermost_root_post_id=? AND deleted_at IS NULL AND is_current_lineage_member=1`).get(
       event.workspace_id, event.mattermost_account_id, event.channel_id, root,
     ) as { id: string; status: string } | undefined;
     const eventId = randomUUID();
+    if (!task) {
+      const legacy = db.prepare(`SELECT id,status FROM tasks WHERE workspace_id=? AND mattermost_account_id IS NULL AND mattermost_channel_id=?
+        AND mattermost_root_post_id=? AND deleted_at IS NULL AND is_current_lineage_member=1 ORDER BY created_at DESC`).all(
+        event.workspace_id,event.channel_id,root,
+      ) as { id: string; status: string }[];
+      if (legacy.length > 1) {
+        db.prepare(`INSERT INTO task_intake_events(id,workspace_id,mattermost_account_id,provider_event_id,sender_id,channel_id,channel_type,root_post_id,source_post_id,provider_created_at,provider_revision,event_kind,payload_hash,received_at,candidate_state,candidate_reason,disposition,error)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,'open','identity_collision','needs_classification',?)`).run(
+          eventId,event.workspace_id,event.mattermost_account_id,event.provider_event_id,event.sender_id,event.channel_id,event.channel_type,root,event.source_post_id,event.provider_created_at,event.provider_revision||null,event.event_kind||'created',payloadHash,stamp,`Ambiguous legacy thread identity matched ${legacy.length} current tasks`,
+        );
+        return { disposition: 'needs_classification', task_id: null, candidate_reason: 'identity_collision' };
+      }
+      if (legacy.length === 1) {
+        db.prepare('UPDATE tasks SET mattermost_account_id=?,lineage_id=COALESCE(lineage_id,?),updated_at=? WHERE id=? AND mattermost_account_id IS NULL').run(
+          event.mattermost_account_id,lineageId(event,root),stamp,legacy[0].id,
+        );
+        task=legacy[0];
+      }
+    }
     if (task) {
       if (task.status === 'done') {
         db.prepare(`INSERT INTO task_intake_events(id,workspace_id,mattermost_account_id,provider_event_id,sender_id,channel_id,channel_type,root_post_id,source_post_id,provider_created_at,provider_revision,event_kind,payload_hash,received_at,candidate_state,candidate_reason,disposition,task_id)
@@ -103,7 +122,6 @@ export function processMattermostInbound(event: MattermostInboundEvent, now = ne
     );
     return { disposition: 'captured', task_id: taskId };
   });
-  if (result.disposition === 'captured') createCompletionContract(result.task_id, { acceptance_criteria: ['Complete the requested outcome and provide verifiable evidence.'] }, now);
+  if (result.disposition === 'captured' && result.task_id) createCompletionContract(result.task_id, { acceptance_criteria: ['Complete the requested outcome and provide verifiable evidence.'] }, now);
   return result;
 }
-

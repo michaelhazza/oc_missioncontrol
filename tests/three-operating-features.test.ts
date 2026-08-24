@@ -19,6 +19,24 @@ test('thread capture is idempotent and replies enrich the canonical task',()=>{
   assert.equal(db.queryOne<{n:number}>('SELECT COUNT(*) AS n FROM task_brief_revisions WHERE task_id=?',[first.task_id])!.n,2);
 });
 
+test('parallel top-level DM requests remain isolated workstreams',()=>{
+  const second=intake.processMattermostInbound(inbound({provider_event_id:'parallel-event',source_post_id:'root-2',message:'A distinct parallel request'}),new Date(now.getTime()+500)) as any;
+  assert.equal(second.disposition,'captured');
+  const first=db.queryOne<{id:string;lineage_id:string}>("SELECT id,lineage_id FROM tasks WHERE mattermost_root_post_id='root-1'")!;
+  const parallel=db.queryOne<{id:string;lineage_id:string}>("SELECT id,lineage_id FROM tasks WHERE mattermost_root_post_id='root-2'")!;
+  assert.notEqual(first.id,parallel.id);assert.notEqual(first.lineage_id,parallel.lineage_id);
+});
+
+test('legacy thread identity adopts uniquely and fails closed on collisions',()=>{
+  db.run("INSERT INTO tasks(id,title,status,workspace_id,mattermost_channel_id,mattermost_root_post_id,updated_at) VALUES('legacy-one','Legacy one','in_progress','default','dm-channel','legacy-root',?)",[now.toISOString()]);
+  const adopted=intake.processMattermostInbound(inbound({provider_event_id:'legacy-adopt',source_post_id:'legacy-reply',root_post_id:'legacy-root',message:'Continue the legacy task'}),new Date(now.getTime()+700)) as any;
+  assert.equal(adopted.task_id,'legacy-one');assert.equal(db.queryOne<{mattermost_account_id:string}>("SELECT mattermost_account_id FROM tasks WHERE id='legacy-one'")!.mattermost_account_id,'switch');
+  db.run("INSERT INTO tasks(id,title,status,workspace_id,mattermost_channel_id,mattermost_root_post_id,updated_at) VALUES('collision-a','Collision A','in_progress','default','dm-channel','collision-root',?),('collision-b','Collision B','in_progress','default','dm-channel','collision-root',?)",[now.toISOString(),now.toISOString()]);
+  const collision=intake.processMattermostInbound(inbound({provider_event_id:'legacy-collision',source_post_id:'collision-reply',root_post_id:'collision-root',message:'Ambiguous continuation'}),new Date(now.getTime()+800)) as any;
+  assert.equal(collision.disposition,'needs_classification');assert.equal(collision.candidate_reason,'identity_collision');
+  assert.match(db.queryOne<{error:string}>("SELECT error FROM task_intake_events WHERE provider_event_id='legacy-collision'")!.error,/matched 2/);
+});
+
 test('terminal-thread replies fail closed as follow-on candidates',()=>{
   const task=db.queryOne<{id:string}>("SELECT id FROM tasks WHERE mattermost_root_post_id='root-1'")!;db.run("UPDATE tasks SET status='done' WHERE id=?",[task.id]);
   const result=intake.processMattermostInbound(inbound({provider_event_id:'event-3',source_post_id:'reply-2',root_post_id:'root-1',message:'Now add another feature'}),new Date(now.getTime()+2000)) as any;
@@ -46,4 +64,3 @@ test('passing evidence creates one deterministic review and cited synthesis',()=
   assert.equal(db.queryOne<{n:number}>("SELECT COUNT(*) AS n FROM completion_reviews WHERE task_id='review-task'")!.n,1);
   const content=JSON.parse(first.synthesis.content_json);assert.ok(content.objective_outcome.evidence_ids.length>0);
 });
-

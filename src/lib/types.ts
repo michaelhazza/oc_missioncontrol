@@ -81,6 +81,7 @@ export interface Task {
   trigger_type?: TriggerType;
   trigger_source?: string;
   cron_job_id?: string;
+  mattermost_account_id?: string;
   mattermost_channel_id?: string;
   mattermost_root_post_id?: string;
   mattermost_source_post_id?: string;
@@ -376,6 +377,7 @@ export interface CreateTaskRequest {
   trigger_type?: TriggerType;
   trigger_source?: string;
   cron_job_id?: string;
+  mattermost_account_id?: string;
   mattermost_channel_id?: string;
   mattermost_root_post_id?: string;
   mattermost_source_post_id?: string;

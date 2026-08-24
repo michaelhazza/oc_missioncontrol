@@ -118,7 +118,14 @@ export async function PATCH(
       updates.push('status_reason = ?');
       values.push(validatedData.status_reason);
     }
+    const existingThreadIdentity = ['mattermost_account_id','mattermost_channel_id','mattermost_root_post_id','mattermost_thread_url'] as const;
+    for (const field of existingThreadIdentity) {
+      if (validatedData[field] !== undefined && existing[field] && validatedData[field] !== existing[field]) {
+        return NextResponse.json({ error: 'Mattermost thread identity is immutable once recorded', field }, { status: 409 });
+      }
+    }
     for (const field of [
+      'mattermost_account_id',
       'mattermost_channel_id',
       'mattermost_root_post_id',
       'mattermost_source_post_id',

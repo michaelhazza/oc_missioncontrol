@@ -74,6 +74,7 @@ export const CreateTaskSchema = z.object({
   trigger_type: TriggerType.optional(),
   trigger_source: z.string().optional(),
   cron_job_id: z.string().optional(),
+  mattermost_account_id: z.string().max(128).optional(),
   mattermost_channel_id: z.string().max(128).optional(),
   mattermost_root_post_id: z.string().max(128).optional(),
   mattermost_source_post_id: z.string().max(128).optional(),
@@ -81,7 +82,8 @@ export const CreateTaskSchema = z.object({
   depends_on_task_ids: z.array(z.string().uuid()).max(50).optional(),
   completion_contract: CompletionContractSchema.optional(),
 }).superRefine((task,ctx)=>{
-  if(Boolean(task.mattermost_channel_id)!==Boolean(task.mattermost_root_post_id))ctx.addIssue({code:z.ZodIssueCode.custom,path:['mattermost_root_post_id'],message:'Mattermost task origin requires both channel and root post IDs'});
+  const identity=[task.mattermost_channel_id,task.mattermost_root_post_id,task.mattermost_source_post_id,task.mattermost_thread_url];
+  if(identity.some(Boolean)&&!identity.every(Boolean))ctx.addIssue({code:z.ZodIssueCode.custom,path:['mattermost_root_post_id'],message:'Mattermost task origin requires channel, root post, source post, and thread URL'});
 });
 
 export const UpdateTaskSchema = z.object({
@@ -95,10 +97,14 @@ export const UpdateTaskSchema = z.object({
   updated_by_agent_id: z.string().uuid().optional(),
   brief: z.string().max(50000, 'Brief must be 50000 characters or less').optional(),
   status_reason: z.string().max(10000).optional().nullable(),
+  mattermost_account_id: z.string().max(128).optional().nullable(),
   mattermost_channel_id: z.string().max(128).optional().nullable(),
   mattermost_root_post_id: z.string().max(128).optional().nullable(),
   mattermost_source_post_id: z.string().max(128).optional().nullable(),
   mattermost_thread_url: z.string().url().max(2000).optional().nullable(),
+}).superRefine((task,ctx)=>{
+  const supplied=['mattermost_account_id','mattermost_channel_id','mattermost_root_post_id','mattermost_thread_url'].filter(field=>task[field as keyof typeof task]!==undefined);
+  if(supplied.length>0&&supplied.length<4)ctx.addIssue({code:z.ZodIssueCode.custom,path:['mattermost_root_post_id'],message:'Canonical Mattermost thread identity must be updated as one complete set'});
 });
 
 // Activity validation schema

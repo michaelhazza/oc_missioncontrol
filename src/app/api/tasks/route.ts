@@ -7,6 +7,7 @@ import { populateTaskRolesFromAgents } from '@/lib/workflow-engine';
 import { getMissionControlUrl } from '@/lib/config';
 import { releaseReadyDependentTasks } from '@/lib/task-dependencies';
 import { createCompletionContract } from '@/lib/completion-contract';
+import { resolveMattermostThreadIdentity } from '@/lib/mattermost-thread-identity';
 import type { Task, CreateTaskRequest, Agent } from '@/lib/types';
 
 // GET /api/tasks - List all tasks with optional filters
@@ -138,6 +139,7 @@ export async function POST(request: NextRequest) {
     // Dependent tasks are parked until the final prerequisite completion
     // atomically releases them for dispatch.
     const status = dependencyIds.length > 0 ? 'pending_dispatch' : (validatedData.status || 'inbox');
+    const threadIdentity = resolveMattermostThreadIdentity({ workspace_id: workspaceId, ...validatedData });
 
     // Use an explicitly requested workflow when supplied; otherwise use the
     // workspace default. Strict multi-role workflows must be opt-in.
@@ -162,8 +164,8 @@ export async function POST(request: NextRequest) {
     }
 
     run(
-      `INSERT INTO tasks (id, title, description, status, priority, assigned_agent_id, created_by_agent_id, workspace_id, business_id, due_date, workflow_template_id, brief, trigger_type, trigger_source, cron_job_id, mattermost_channel_id, mattermost_root_post_id, mattermost_source_post_id, mattermost_thread_url, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO tasks (id, title, description, status, priority, assigned_agent_id, created_by_agent_id, workspace_id, business_id, due_date, workflow_template_id, brief, trigger_type, trigger_source, cron_job_id, mattermost_account_id, mattermost_channel_id, mattermost_root_post_id, mattermost_source_post_id, mattermost_thread_url, lineage_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         validatedData.title,
@@ -180,10 +182,12 @@ export async function POST(request: NextRequest) {
         validatedData.trigger_type || 'manual',
         validatedData.trigger_source || null,
         validatedData.cron_job_id || null,
-        validatedData.mattermost_channel_id || null,
-        validatedData.mattermost_root_post_id || null,
-        validatedData.mattermost_source_post_id || null,
-        validatedData.mattermost_thread_url || null,
+        threadIdentity?.accountId || null,
+        threadIdentity?.channelId || null,
+        threadIdentity?.rootPostId || null,
+        threadIdentity?.sourcePostId || null,
+        threadIdentity?.threadUrl || null,
+        threadIdentity?.lineageId || null,
         now,
         now,
       ]
