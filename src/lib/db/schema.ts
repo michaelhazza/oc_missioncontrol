@@ -251,6 +251,7 @@ CREATE TABLE IF NOT EXISTS mattermost_task_update_outbox (
   task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
   action_key TEXT NOT NULL UNIQUE,
   milestone TEXT NOT NULL,
+  account_id TEXT NOT NULL,
   channel_id TEXT NOT NULL,
   root_post_id TEXT NOT NULL,
   message TEXT NOT NULL,

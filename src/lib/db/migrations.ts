@@ -1293,6 +1293,16 @@ const migrations: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_completion_reviews_task ON completion_reviews(task_id,reviewed_at DESC);
       `);
     }
+  },
+  {
+    id: '039',
+    name: 'bind_mattermost_outbox_to_originating_account',
+    up: (db) => {
+      const columns = new Set((db.prepare('PRAGMA table_info(mattermost_task_update_outbox)').all() as { name: string }[]).map(row => row.name));
+      if (!columns.has('account_id')) db.exec("ALTER TABLE mattermost_task_update_outbox ADD COLUMN account_id TEXT NOT NULL DEFAULT 'switch'");
+      db.exec(`UPDATE mattermost_task_update_outbox
+        SET account_id=COALESCE((SELECT mattermost_account_id FROM tasks WHERE tasks.id=mattermost_task_update_outbox.task_id),account_id)`);
+    }
   }
 ];
 

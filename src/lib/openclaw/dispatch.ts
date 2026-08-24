@@ -27,9 +27,10 @@ export interface DispatchResult {
 
 export function buildMattermostThreadInstruction(task: Task): string {
   if (!task.mattermost_root_post_id) return '';
+  const account = task.mattermost_account_id || '(missing account — fail closed)';
   const destination = task.mattermost_thread_url ||
     `Mattermost channel ${task.mattermost_channel_id || '(current channel)'}, root post ${task.mattermost_root_post_id}`;
-  return `\n**Originating Mattermost thread:** ${destination}\n**Single-speaker requirement:** You are the sole routine speaker for this task. Post only meaningful, complete checkpoints and the final result in this exact thread (reply_to/root_id: \`${task.mattermost_root_post_id}\`). Never post acknowledgements, internal status labels, token-stream fragments, heartbeat confirmations, or messages such as "working", "checking", or "I". Mission Control heartbeats and routine lifecycle transitions are silent. Do not post a new top-level DM message.`;
+  return `\n**Originating Mattermost thread:** ${destination}\n**Required sending identity:** Mattermost account \`${account}\`, channel \`${task.mattermost_channel_id || '(missing channel — fail closed)'}\`, root/reply_to \`${task.mattermost_root_post_id}\`. Never default to the current conversation or current account; fail closed if any of these three values cannot be supplied together.\n**Single-speaker requirement:** You are the sole routine speaker for this task. Post only meaningful, complete checkpoints and the final result in this exact thread. Never post acknowledgements, internal status labels, token-stream fragments, heartbeat confirmations, or messages such as "working", "checking", or "I". Mission Control heartbeats and routine lifecycle transitions are silent. Do not post a new top-level DM message.`;
 }
 
 /**

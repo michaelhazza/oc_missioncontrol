@@ -12,8 +12,8 @@ const COOLDOWN_MS=15*60_000;
 // task threads. Routine lifecycle milestones remain mechanically suppressed.
 const userVisibleMilestones=new Set<string>(['task_exception','completion_rework','executive_synthesis']);
 
-interface TaskDestination{id:string;title:string;mattermost_channel_id:string|null;mattermost_root_post_id:string|null}
-export interface MilestoneDelivery{id:string;task_id:string;action_key:string;milestone:string;channel_id:string;root_post_id:string;message:string;state:string;attempts:number;not_before:string|null;claim_owner:string|null;claim_expires_at:string|null}
+interface TaskDestination{id:string;title:string;mattermost_account_id:string|null;mattermost_channel_id:string|null;mattermost_root_post_id:string|null}
+export interface MilestoneDelivery{id:string;task_id:string;action_key:string;milestone:string;account_id:string;channel_id:string;root_post_id:string;message:string;state:string;attempts:number;not_before:string|null;claim_owner:string|null;claim_expires_at:string|null}
 
 const semanticMessages:Record<string,(title:string,detail:string)=>string>={
   dispatched:(title,detail)=>`▶️ **Work started — ${title}**\n${detail}`,
@@ -31,12 +31,12 @@ const semanticMessages:Record<string,(title:string,detail:string)=>string>={
 export function queueMattermostMilestone(taskId:string,milestone:keyof typeof semanticMessages,detail:string,actionKey:string,now=new Date()):MilestoneDelivery|null{
   if(!userVisibleMilestones.has(milestone))return null;
   return transaction(()=>{
-    const task=queryOne<TaskDestination>('SELECT id,title,mattermost_channel_id,mattermost_root_post_id FROM tasks WHERE id=?',[taskId]);
-    if(!task?.mattermost_channel_id||!task.mattermost_root_post_id)return null;
+    const task=queryOne<TaskDestination>('SELECT id,title,mattermost_account_id,mattermost_channel_id,mattermost_root_post_id FROM tasks WHERE id=?',[taskId]);
+    if(!task?.mattermost_account_id||!task.mattermost_channel_id||!task.mattermost_root_post_id)return null;
     const previous=queryOne<{created_at:string;state:string}>(`SELECT created_at,state FROM mattermost_task_update_outbox WHERE task_id=? AND milestone=? AND state IN ('pending','delivering','delivered') ORDER BY created_at DESC LIMIT 1`,[taskId,milestone]);
     if(previous&&now.getTime()-Date.parse(previous.created_at)<COOLDOWN_MS)return null;
     const id=randomUUID(),iso=now.toISOString(),message=semanticMessages[milestone](task.title,detail);
-    const inserted=run(`INSERT OR IGNORE INTO mattermost_task_update_outbox(id,task_id,action_key,milestone,channel_id,root_post_id,message,state,not_before,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'pending',?,?,?)`,[id,taskId,actionKey,milestone,task.mattermost_channel_id,task.mattermost_root_post_id,message,iso,iso,iso]);
+    const inserted=run(`INSERT OR IGNORE INTO mattermost_task_update_outbox(id,task_id,action_key,milestone,account_id,channel_id,root_post_id,message,state,not_before,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,'pending',?,?,?)`,[id,taskId,actionKey,milestone,task.mattermost_account_id,task.mattermost_channel_id,task.mattermost_root_post_id,message,iso,iso,iso]);
     if(!inserted.changes)return null;
     run(`INSERT INTO task_activities(id,task_id,activity_type,message,metadata,created_at) VALUES(?,?,'mattermost_update_queued',?,?,?)`,[randomUUID(),taskId,`Queued Mattermost ${milestone} milestone`,JSON.stringify({outboxId:id,actionKey,rootPostId:task.mattermost_root_post_id}),iso]);
     return queryOne<MilestoneDelivery>('SELECT * FROM mattermost_task_update_outbox WHERE id=?',[id])!;
@@ -44,8 +44,13 @@ export function queueMattermostMilestone(taskId:string,milestone:keyof typeof se
 }
 
 export async function defaultMattermostSender(item:MilestoneDelivery):Promise<{messageId?:string}>{
-  const {stdout}=await execFile('openclaw',['message','send','--account','switch','--channel','mattermost','--target',item.channel_id,'--reply-to',item.root_post_id,'--message',item.message,'--json'],{timeout:30_000,maxBuffer:1024*1024});
+  const {stdout}=await execFile('openclaw',buildMattermostSendArgs(item),{timeout:30_000,maxBuffer:1024*1024});
   return{messageId:parseProviderMessageId(stdout)};
+}
+
+export function buildMattermostSendArgs(item:Pick<MilestoneDelivery,'account_id'|'channel_id'|'root_post_id'|'message'>):string[]{
+  if(!item.account_id||!item.channel_id||!item.root_post_id)throw new Error('Mattermost delivery requires account, channel, and root identity');
+  return['message','send','--account',item.account_id,'--channel','mattermost','--target',item.channel_id,'--reply-to',item.root_post_id,'--message',item.message,'--json'];
 }
 
 export function parseProviderMessageId(stdout:string):string|undefined{

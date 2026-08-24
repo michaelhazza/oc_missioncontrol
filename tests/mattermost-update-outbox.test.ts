@@ -4,7 +4,7 @@ import fs from'node:fs';import os from'node:os';import path from'node:path';
 const dir=fs.mkdtempSync(path.join(os.tmpdir(),'mc-mattermost-outbox-'));process.env.DATABASE_PATH=path.join(dir,'db.sqlite');process.env.OPENCLAW_WEBHOOK_SECRET='test';
 let db:typeof import('../src/lib/db');let updates:typeof import('../src/lib/openclaw/mattermost-task-updates');
 const t0=new Date('2026-08-07T01:00:00.000Z');
-before(async()=>{db=await import('../src/lib/db');updates=await import('../src/lib/openclaw/mattermost-task-updates');db.run("INSERT OR IGNORE INTO agents(id,name,role,gateway_agent_id) VALUES('worker','Worker','specialist','worker')");db.run(`INSERT INTO tasks(id,title,status,assigned_agent_id,workspace_id,mattermost_channel_id,mattermost_root_post_id,updated_at) VALUES('threaded','Threaded task','assigned','worker','default','channel-1','root-1',?)`,[t0.toISOString()]);db.run(`INSERT INTO tasks(id,title,status,assigned_agent_id,workspace_id,updated_at) VALUES('unthreaded','Unthreaded task','assigned','worker','default',?)`,[t0.toISOString()]);});
+before(async()=>{db=await import('../src/lib/db');updates=await import('../src/lib/openclaw/mattermost-task-updates');db.run("INSERT OR IGNORE INTO agents(id,name,role,gateway_agent_id) VALUES('worker','Worker','specialist','worker')");db.run(`INSERT INTO tasks(id,title,status,assigned_agent_id,workspace_id,mattermost_account_id,mattermost_channel_id,mattermost_root_post_id,updated_at) VALUES('threaded','Threaded task','assigned','worker','default','tank','channel-1','root-1',?)`,[t0.toISOString()]);db.run(`INSERT INTO tasks(id,title,status,assigned_agent_id,workspace_id,updated_at) VALUES('unthreaded','Unthreaded task','assigned','worker','default',?)`,[t0.toISOString()]);});
 after(()=>{db.closeDb();fs.rmSync(dir,{recursive:true,force:true})});
 
 test('suppresses routine milestones and permits only approved exception/completion families',()=>{
@@ -15,14 +15,22 @@ test('suppresses routine milestones and permits only approved exception/completi
   assert.equal(updates.queueMattermostMilestone('threaded','decision','Michael must decide.','action:decision',t0),null);
   assert.equal(updates.queueMattermostMilestone('threaded','failed','Execution failed.','action:failed',t0),null);
   const now=t0.toISOString();
-  db.run(`INSERT INTO mattermost_task_update_outbox(id,task_id,action_key,milestone,channel_id,root_post_id,message,state,not_before,created_at,updated_at)
-    VALUES('existing-exception','threaded','existing:blocked','blocked','channel-1','root-1','existing exception','pending',?,?,?)`,[now,now,now]);
+  db.run(`INSERT INTO mattermost_task_update_outbox(id,task_id,action_key,milestone,account_id,channel_id,root_post_id,message,state,not_before,created_at,updated_at)
+    VALUES('existing-exception','threaded','existing:blocked','blocked','tank','channel-1','root-1','existing exception','pending',?,?,?)`,[now,now,now]);
   assert.equal(updates.queueMattermostMilestone('threaded','blocked','duplicate','action:blocked',new Date(t0.getTime()+1_000)),null);
   assert.equal(updates.queueMattermostMilestone('threaded','blocked','cooldown duplicate','different-key',new Date(t0.getTime()+60_000)),null);
   assert.equal(updates.queueMattermostMilestone('unthreaded','blocked','no destination','unthreaded-key',t0),null);
   assert.ok(updates.queueMattermostMilestone('threaded','task_exception','Decision required.','exception:1',new Date(t0.getTime()+2_000)));
   assert.ok(updates.queueMattermostMilestone('threaded','completion_rework','Evidence stale.','rework:1',new Date(t0.getTime()+3_000)));
   assert.ok(updates.queueMattermostMilestone('threaded','executive_synthesis','Outcome verified.','synthesis:1',new Date(t0.getTime()+4_000)));
+  const queued=db.queryOne<{account_id:string}>("SELECT account_id FROM mattermost_task_update_outbox WHERE action_key='synthesis:1'")!;
+  assert.equal(queued.account_id,'tank');
+});
+
+test('sender binds account, channel, and root without current-conversation fallback',()=>{
+  const args=updates.buildMattermostSendArgs({account_id:'switch',channel_id:'channel-1',root_post_id:'root-1',message:'done'});
+  assert.deepEqual(args.slice(0,10),['message','send','--account','switch','--channel','mattermost','--target','channel-1','--reply-to','root-1']);
+  assert.throws(()=>updates.buildMattermostSendArgs({account_id:'',channel_id:'channel-1',root_post_id:'root-1',message:'done'}),/requires account/);
 });
 
 test('extracts the provider post ID from OpenClaw direct and nested JSON',()=>{
@@ -42,8 +50,8 @@ test('fenced outbox delivers only allowlisted semantic families',async()=>{
 
 test('does not drain legacy routine milestones queued before single-speaker enforcement',async()=>{
   const now=new Date(t0.getTime()+10*60_000).toISOString();
-  db.run(`INSERT INTO mattermost_task_update_outbox(id,task_id,action_key,milestone,channel_id,root_post_id,message,state,not_before,created_at,updated_at)
-    VALUES('legacy-routine','threaded','legacy:dispatch','dispatched','channel-1','root-1','legacy chatter','pending',?,?,?)`,[now,now,now]);
+  db.run(`INSERT INTO mattermost_task_update_outbox(id,task_id,action_key,milestone,account_id,channel_id,root_post_id,message,state,not_before,created_at,updated_at)
+    VALUES('legacy-routine','threaded','legacy:dispatch','dispatched','tank','channel-1','root-1','legacy chatter','pending',?,?,?)`,[now,now,now]);
   let sends=0;
   assert.deepEqual(await updates.drainMattermostOutbox(new Date(now),async()=>{sends++;return{}}),{delivered:0,failed:0});
   assert.equal(sends,0);

@@ -36,11 +36,14 @@ test('thread identity is deterministic while non-Mattermost tasks remain unchang
 test('dispatch pins all user-visible output to the originating thread', () => {
   const instruction = buildMattermostThreadInstruction({
     ...baseTask,
+    mattermost_account_id: 'switch',
     mattermost_channel_id: 'channel-1',
     mattermost_root_post_id: 'root-1',
     mattermost_thread_url: 'https://mm.example.com/team/pl/root-1',
   });
   assert.match(instruction, /root-1/);
+  assert.match(instruction, /account `switch`/);
+  assert.match(instruction, /Never default to the current conversation/);
   assert.match(instruction, /Do not post a new top-level DM message/);
   assert.match(instruction, /sole routine speaker/);
   assert.match(instruction, /token-stream fragments/);
