@@ -1303,6 +1303,79 @@ const migrations: Migration[] = [
       db.exec(`UPDATE mattermost_task_update_outbox
         SET account_id=COALESCE((SELECT mattermost_account_id FROM tasks WHERE tasks.id=mattermost_task_update_outbox.task_id),account_id)`);
     }
+  },
+  {
+    id: '040',
+    name: 'agent_control_plane_contracts_and_memory_boundaries',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS agent_tool_contracts (
+          name TEXT NOT NULL, version INTEGER NOT NULL, risk TEXT NOT NULL
+            CHECK(risk IN ('read','internal_write','external_action','destructive')),
+          input_schema TEXT NOT NULL, rate_limit_count INTEGER NOT NULL CHECK(rate_limit_count>0),
+          rate_limit_window_seconds INTEGER NOT NULL CHECK(rate_limit_window_seconds>0),
+          enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL,
+          PRIMARY KEY(name,version)
+        );
+        CREATE TABLE IF NOT EXISTS agent_tool_grants (
+          agent_id TEXT NOT NULL REFERENCES agents(id), contract_name TEXT NOT NULL,
+          contract_version INTEGER NOT NULL, granted_by TEXT NOT NULL, expires_at TEXT,
+          created_at TEXT NOT NULL, revoked_at TEXT,
+          PRIMARY KEY(agent_id,contract_name,contract_version),
+          FOREIGN KEY(contract_name,contract_version) REFERENCES agent_tool_contracts(name,version)
+        );
+        CREATE TABLE IF NOT EXISTS agent_tool_invocations (
+          id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+          run_id TEXT NOT NULL REFERENCES task_execution_runs(id) ON DELETE CASCADE,
+          agent_id TEXT NOT NULL REFERENCES agents(id), contract_name TEXT NOT NULL,
+          contract_version INTEGER NOT NULL, idempotency_key TEXT NOT NULL, input_digest TEXT NOT NULL,
+          risk TEXT NOT NULL, state TEXT NOT NULL
+            CHECK(state IN ('pending_confirmation','authorized','completed','denied','failed')),
+          confirmation_actor TEXT, confirmation_at TEXT, result_digest TEXT, error_code TEXT,
+          created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+          UNIQUE(agent_id,idempotency_key),
+          FOREIGN KEY(contract_name,contract_version) REFERENCES agent_tool_contracts(name,version)
+        );
+        CREATE INDEX IF NOT EXISTS idx_tool_invocation_rate
+          ON agent_tool_invocations(agent_id,contract_name,contract_version,created_at);
+        CREATE TABLE IF NOT EXISTS agent_control_plane_audit_events (
+          id TEXT PRIMARY KEY, task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+          actor_id TEXT NOT NULL, event_type TEXT NOT NULL, target_id TEXT,
+          outcome TEXT NOT NULL CHECK(outcome IN ('allowed','denied','completed','failed')),
+          detail_digest TEXT NOT NULL, created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_control_plane_audit_task
+          ON agent_control_plane_audit_events(task_id,created_at);
+        CREATE TABLE IF NOT EXISTS reference_workflow_runs (
+          id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+          execution_run_id TEXT NOT NULL UNIQUE REFERENCES task_execution_runs(id) ON DELETE CASCADE,
+          owner_agent_id TEXT NOT NULL REFERENCES agents(id), state TEXT NOT NULL
+            CHECK(state IN ('running','waiting_input','evaluating','complete','failed')),
+          phase TEXT NOT NULL, checkpoint TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1,
+          pending_invocation_id TEXT REFERENCES agent_tool_invocations(id), evaluator_agent_id TEXT REFERENCES agents(id),
+          evaluation_verdict TEXT CHECK(evaluation_verdict IN ('passed','failed')),
+          evaluation_evidence TEXT, evaluation_evidence_digest TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS reference_workflow_events (
+          id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL REFERENCES reference_workflow_runs(id) ON DELETE CASCADE,
+          idempotency_key TEXT NOT NULL, expected_version INTEGER NOT NULL, event_type TEXT NOT NULL,
+          payload TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(workflow_id,idempotency_key)
+        );
+        CREATE TABLE IF NOT EXISTS agent_memory_records (
+          id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, subject_key TEXT NOT NULL,
+          plane TEXT NOT NULL CHECK(plane IN ('session_context','curated_fact','semantic_memory')),
+          content TEXT, content_hash TEXT NOT NULL, source_ref TEXT NOT NULL,
+          retention_until TEXT, correction_of_id TEXT REFERENCES agent_memory_records(id),
+          deleted_at TEXT, deletion_reason TEXT, created_at TEXT NOT NULL,
+          CHECK(plane!='session_context' OR retention_until IS NOT NULL),
+          CHECK((deleted_at IS NULL AND content IS NOT NULL AND deletion_reason IS NULL)
+             OR (deleted_at IS NOT NULL AND content IS NULL AND deletion_reason IS NOT NULL))
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_current_fact
+          ON agent_memory_records(workspace_id,subject_key,plane) WHERE deleted_at IS NULL;
+        CREATE INDEX IF NOT EXISTS idx_memory_retention ON agent_memory_records(plane,retention_until);
+      `);
+    }
   }
 ];
 
