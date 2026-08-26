@@ -34,3 +34,5 @@ Use one agent when the work has one authority domain, one bounded deliverable an
 ## Safety and rollout
 
 Migration `040` is additive and seeds no contracts or grants. Production activation requires security-owned contract registration and grants, an authenticated human confirmation principal, retention-owner approval, and monitoring for denied/rate-limited invocations. This change does not deploy infrastructure, alter credentials or enable any external action by itself.
+
+The repository-owned OpenClaw intake plugin now retries only network errors, HTTP 429, and HTTP 5xx, with a bounded 1–5 attempt policy. Every retry reuses the exact body, timestamp, signature, and provider event ID so Mission Control's intake idempotency remains authoritative. Other HTTP 4xx responses fail immediately. The plugin itself does not provide a durable disk queue; if OpenClaw exits after exhausting retries, Mission Control recovery cannot recreate an event it never received. Closing that residual requires an OpenClaw-owned durable outbound queue rather than Mission Control application logic.

@@ -47,8 +47,11 @@ test('typed least-privilege tool admission fails closed and is idempotent',()=>{
   assert.equal(control.requestToolInvocation(input,now).id,pending.id);
   assert.throws(()=>control.requestToolInvocation({...input,payload:{...input.payload,message:'changed'}},now),/IDEMPOTENCY_PAYLOAD_MISMATCH/);
   assert.throws(()=>control.confirmToolInvocation(pending.id,'builder',now),/SEPARATION_REQUIRED/);
+  assert.throws(()=>control.confirmToolInvocation(pending.id,'untrusted-actor',now),/AUTHORITY_REQUIRED/);
   assert.equal(control.confirmToolInvocation(pending.id,'security-owner',now).state,'authorized');
   control.completeToolInvocation(pending.id,{providerMessageId:'synthetic'},now);
+  control.completeToolInvocation(pending.id,{providerMessageId:'synthetic'},now);
+  assert.throws(()=>control.completeToolInvocation(pending.id,{providerMessageId:'different'},now),/RESULT_MISMATCH/);
   assert.equal(db.queryOne<any>("SELECT count(*) total FROM agent_control_plane_audit_events WHERE target_id=? AND outcome IN ('allowed','completed')",[pending.id])!.total,3);
   assert.throws(()=>control.requestToolInvocation({...input,idempotencyKey:'send-2'},new Date(now.getTime()+1)),/TOOL_RATE_LIMITED/);
 });
@@ -62,6 +65,7 @@ test('reference workflow pauses, resumes after confirmed completion, and require
   const paused=control.applyWorkflowEvent({workflowId:workflow.id,idempotencyKey:'pause-1',expectedVersion:1,type:'pause_for_confirmation',payload:{invocationId:invocation.id}},now);
   assert.equal(paused.state,'waiting_input');
   assert.equal(control.applyWorkflowEvent({workflowId:workflow.id,idempotencyKey:'pause-1',expectedVersion:1,type:'pause_for_confirmation',payload:{invocationId:invocation.id}}).version,2);
+  assert.throws(()=>control.applyWorkflowEvent({workflowId:workflow.id,idempotencyKey:'pause-1',expectedVersion:1,type:'pause_for_confirmation',payload:{invocationId:'different'}}),/EVENT_MISMATCH/);
   assert.throws(()=>control.applyWorkflowEvent({workflowId:workflow.id,idempotencyKey:'resume-early',expectedVersion:2,type:'resume_after_tool',payload:{}}),/TOOL_NOT_COMPLETE/);
   control.confirmToolInvocation(invocation.id,'security-owner',now); control.completeToolInvocation(invocation.id,{ok:true},now);
   const resumed=control.applyWorkflowEvent({workflowId:workflow.id,idempotencyKey:'resume-1',expectedVersion:2,type:'resume_after_tool',payload:{toolResultDigest:'sha256:def'}},now);
@@ -81,6 +85,7 @@ test('workflow checkpoint and idempotent events survive database restart',()=>{
 test('memory planes enforce retention, correction, and deletion boundaries',()=>{
   const now=new Date('2026-08-26T02:00:00.000Z');
   assert.throws(()=>control.writeMemory({workspaceId:'default',subjectKey:'task:1',plane:'session_context',content:'transient',sourceRef:'session:test'},now),/SESSION_RETENTION_REQUIRED/);
+  assert.throws(()=>control.writeMemory({workspaceId:'default',subjectKey:'task:1',plane:'session_context',content:'transient',sourceRef:'session:test',retentionUntil:'2026-08-25T02:00:00.000Z'},now),/RETENTION_INVALID/);
   const session=control.writeMemory({workspaceId:'default',subjectKey:'task:1',plane:'session_context',content:'transient',sourceRef:'session:test',retentionUntil:'2026-08-27T02:00:00.000Z'},now);
   const fact=control.writeMemory({workspaceId:'default',subjectKey:'preference:format',plane:'curated_fact',content:'concise',sourceRef:'user:test'},now);
   assert.throws(()=>control.writeMemory({workspaceId:'default',subjectKey:'preference:format',plane:'semantic_memory',content:'wrong plane',sourceRef:'model:test',correctionOfId:fact.id},now),/MEMORY_CORRECTION_BOUNDARY/);
