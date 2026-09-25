@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import { X, Save, Trash2, Activity, Package, Bot, ClipboardList, Plus, Users, FileText } from 'lucide-react';
+import { X, Save, Trash2, Activity, Package, Bot, ClipboardList, Plus, Users, FileText, MessageCircle } from 'lucide-react';
 import { useMissionControl } from '@/lib/store';
 import { triggerAutoDispatch, shouldTriggerAutoDispatch } from '@/lib/auto-dispatch';
 import { ActivityLog } from './ActivityLog';
@@ -10,9 +10,10 @@ import { SessionsList } from './SessionsList';
 import { PlanningTab } from './PlanningTab';
 import { TeamTab } from './TeamTab';
 import { AgentModal } from './AgentModal';
+import { TaskChat } from './TaskChat';
 import type { Task, TaskPriority, TaskStatus } from '@/lib/types';
 
-type TabType = 'overview' | 'brief' | 'planning' | 'team' | 'activity' | 'deliverables' | 'sessions';
+type TabType = 'chat' | 'overview' | 'brief' | 'planning' | 'team' | 'activity' | 'deliverables' | 'sessions';
 
 interface TaskModalProps {
   task?: Task;
@@ -26,7 +27,7 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
   const [showAgentModal, setShowAgentModal] = useState(false);
   const [usePlanningMode, setUsePlanningMode] = useState(false);
   // Auto-switch to planning tab if task is in planning status
-  const [activeTab, setActiveTab] = useState<TabType>(task?.status === 'planning' ? 'planning' : 'overview');
+  const [activeTab, setActiveTab] = useState<TabType>(task?.status === 'planning' ? 'planning' : task ? 'chat' : 'overview');
 
   // Stable callback for when spec is locked - use window.location.reload() to refresh data
   const handleSpecLocked = useCallback(() => {
@@ -205,6 +206,7 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
   const priorities: TaskPriority[] = ['low', 'normal', 'high', 'urgent'];
 
   const tabs = [
+    { id: 'chat' as TabType, label: 'Chat', icon: <MessageCircle className="w-4 h-4" /> },
     { id: 'overview' as TabType, label: 'Overview', icon: null },
     { id: 'brief' as TabType, label: 'Brief', icon: <FileText className="w-4 h-4" /> },
     { id: 'planning' as TabType, label: 'Planning', icon: <ClipboardList className="w-4 h-4" /> },
@@ -215,8 +217,8 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
   ];
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-3 sm:p-4">
-      <div className="bg-mc-bg-secondary border border-mc-border rounded-t-xl sm:rounded-lg w-full max-w-2xl max-h-[92vh] sm:max-h-[90vh] flex flex-col pb-[env(safe-area-inset-bottom)] sm:pb-0">
+    <div className="fixed inset-0 bg-black/60 flex items-end sm:items-center justify-center z-50 p-0 sm:p-3 lg:p-4">
+      <div className="bg-mc-bg-secondary border border-mc-border rounded-t-xl sm:rounded-lg w-full sm:w-[96vw] lg:w-[94vw] max-w-[1600px] h-[96dvh] sm:h-[94vh] flex flex-col pb-[env(safe-area-inset-bottom)] sm:pb-0 shadow-2xl">
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-mc-border flex-shrink-0">
           <div className="flex-1 min-w-0">
@@ -273,6 +275,10 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
 
         {/* Content Area */}
         <div className="flex-1 overflow-y-auto p-4">
+          {/* Chat Tab */}
+          {activeTab === 'chat' && task && (
+            <TaskChat taskId={task.id} agentName={task.assigned_agent?.name || agents.find((agent) => agent.id === task.assigned_agent_id)?.name} />
+          )}
           {/* Overview Tab */}
           {activeTab === 'overview' && (
             <form onSubmit={handleSubmit} className="space-y-4">

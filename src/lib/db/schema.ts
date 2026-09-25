@@ -143,6 +143,27 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at TEXT DEFAULT (datetime('now'))
 );
 
+-- Canonical, auditable task chat. Kept separate from legacy conversations so
+-- delivery state and idempotency can be enforced without changing old data.
+CREATE TABLE IF NOT EXISTS task_messages (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  sender_type TEXT NOT NULL CHECK (sender_type IN ('human', 'agent', 'system')),
+  sender_agent_id TEXT REFERENCES agents(id),
+  sender_name TEXT NOT NULL,
+  content TEXT NOT NULL,
+  client_idempotency_key TEXT NOT NULL,
+  delivery_status TEXT NOT NULL DEFAULT 'queued' CHECK (delivery_status IN ('queued', 'delivered', 'failed', 'received')),
+  delivery_error TEXT,
+  gateway_session_key TEXT,
+  gateway_message_id TEXT,
+  metadata TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(task_id, client_idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS idx_task_messages_timeline ON task_messages(task_id, created_at, id);
+
 -- Events table (for live feed)
 CREATE TABLE IF NOT EXISTS events (
   id TEXT PRIMARY KEY,
