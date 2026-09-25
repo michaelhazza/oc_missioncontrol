@@ -5,27 +5,53 @@ import {
   broadcastTaskMessage,
   createTaskMessage,
   deliverTaskMessage,
+  getTaskMessageState,
   listTaskMessages,
+  markTaskMessagesRead,
 } from '@/lib/task-chat';
 
 export const dynamic = 'force-dynamic';
 
 const MessageSchema = z.object({
+  action: z.enum(['send', 'mark_read']).optional().default('send'),
   content: z.string().trim().min(1).max(8000),
   sender_type: z.enum(['human', 'agent', 'system']).optional().default('human'),
   sender_agent_id: z.string().uuid().nullable().optional(),
   sender_name: z.string().trim().min(1).max(100).optional(),
   idempotency_key: z.string().trim().min(8).max(200),
   retry: z.boolean().optional().default(false),
+  through_seq: z.number().int().nonnegative().optional(),
 });
 
+const MarkReadSchema = z.object({
+  action: z.literal('mark_read'),
+  through_seq: z.number().int().nonnegative().optional(),
+});
+
+const READER_KEY = 'mission-control-human';
+
 export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
-  const after = request.nextUrl.searchParams.get('after') || undefined;
-  return NextResponse.json(listTaskMessages(params.id, after));
+  const afterSeq = Number.parseInt(request.nextUrl.searchParams.get('after_seq') || '0', 10);
+  try {
+    const messages = listTaskMessages(params.id, Number.isFinite(afterSeq) ? afterSeq : 0);
+    const state = getTaskMessageState(params.id, READER_KEY);
+    return NextResponse.json({ messages, ...state });
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : 'Unable to load messages' }, { status: 404 });
+  }
 }
 
 export async function POST(request: NextRequest, { params }: { params: { id: string } }) {
-  const parsed = MessageSchema.safeParse(await request.json().catch(() => null));
+  const body = await request.json().catch(() => null);
+  const markRead = MarkReadSchema.safeParse(body);
+  if (markRead.success) {
+    try {
+      return NextResponse.json(markTaskMessagesRead(params.id, READER_KEY, markRead.data.through_seq));
+    } catch (error) {
+      return NextResponse.json({ error: error instanceof Error ? error.message : 'Unable to mark messages read' }, { status: 404 });
+    }
+  }
+  const parsed = MessageSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json({ error: 'Invalid message', details: parsed.error.issues }, { status: 400 });
   }

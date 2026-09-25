@@ -4,8 +4,8 @@ Task chat is a durable Mission Control feature, not a view over an ephemeral mod
 
 ## Data and ordering
 
-- `task_messages` is the canonical audit record. Every row is bound to one task and records sender identity, content, timestamps, gateway session/run identity, delivery status, and a task-scoped client idempotency key.
-- The API returns messages ordered by `created_at, id`. The Chat tab merges them with existing task activities to produce one chronological operational view.
+- `task_messages` is the canonical audit record. Every row is bound to one task and records a monotonic task-local sequence, sender identity, content, timestamps, live execution session evidence, delivery attempts/status, and a task-scoped client idempotency key.
+- `task_message_reads` stores the durable human read cursor. The API returns messages in `seq` order and supports `after_seq` catch-up. The Chat tab merges messages with existing task activities to produce one chronological operational view.
 - Human messages move through `queued → delivered` or `queued → failed`. Agent and system messages enter as `received`. A failed message is retried using its original idempotency key, preventing duplicate rows and duplicate gateway calls.
 
 ## Realtime and reconnect
@@ -15,9 +15,13 @@ Task chat is a durable Mission Control feature, not a view over an ephemeral mod
 
 ## Agent routing
 
-- A human message is routed only to the task's currently assigned agent and its active Mission Control OpenClaw session.
+- A human message is routed only to the task's currently assigned agent and the live fenced `task_execution_runs.session_key` for that exact task and agent. There is deliberately no generic-agent-session fallback.
 - `chat.send` uses `task-chat-<message-id>` as the gateway idempotency key and includes the task ID plus a callback contract for the assigned agent to persist its response in the same task chat.
-- There is no UI coupling to a transient run. The stored gateway session key/run ID are delivery evidence only.
+- The UI remains decoupled from transient runs; server-side routing resolves the live execution at delivery time. The stored gateway session key/run ID are delivery evidence only.
+
+## Mattermost continuity
+
+Task chat does not weaken the existing single-speaker Mattermost policy. The originating account/channel/root identity and fenced exception/completion outbox remain intact; routine chat is not duplicated into Mattermost. Agents receive the message in their exact task execution context and are instructed to persist the concise reply in Mission Control. Existing Mattermost exception and completion notifications continue unchanged.
 
 ## Access and safety
 

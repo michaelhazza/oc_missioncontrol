@@ -148,21 +148,32 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE TABLE IF NOT EXISTS task_messages (
   id TEXT PRIMARY KEY,
   task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  seq INTEGER NOT NULL,
   sender_type TEXT NOT NULL CHECK (sender_type IN ('human', 'agent', 'system')),
   sender_agent_id TEXT REFERENCES agents(id),
   sender_name TEXT NOT NULL,
   content TEXT NOT NULL,
   client_idempotency_key TEXT NOT NULL,
   delivery_status TEXT NOT NULL DEFAULT 'queued' CHECK (delivery_status IN ('queued', 'delivered', 'failed', 'received')),
+  delivery_attempts INTEGER NOT NULL DEFAULT 0,
   delivery_error TEXT,
   gateway_session_key TEXT,
   gateway_message_id TEXT,
   metadata TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  UNIQUE(task_id, client_idempotency_key)
+  UNIQUE(task_id, client_idempotency_key),
+  UNIQUE(task_id, seq)
 );
-CREATE INDEX IF NOT EXISTS idx_task_messages_timeline ON task_messages(task_id, created_at, id);
+CREATE INDEX IF NOT EXISTS idx_task_messages_timeline ON task_messages(task_id, seq);
+
+CREATE TABLE IF NOT EXISTS task_message_reads (
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  reader_key TEXT NOT NULL,
+  last_read_seq INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(task_id, reader_key)
+);
 
 -- Events table (for live feed)
 CREATE TABLE IF NOT EXISTS events (

@@ -3,7 +3,7 @@ import { randomUUID } from 'crypto';
 import { broadcast } from '@/lib/events';
 import { getDb, queryAll, queryOne, run, transaction } from '@/lib/db';
 import { getOpenClawClient } from '@/lib/openclaw/client';
-import type { Agent, OpenClawSession, Task, TaskMessage, TaskMessageSender } from '@/lib/types';
+import type { Agent, Task, TaskMessage, TaskMessageSender } from '@/lib/types';
 
 type TaskChatTask = Task & { assigned_agent_name?: string };
 
@@ -26,20 +26,55 @@ export function getTaskMessage(taskId: string, messageId: string): TaskMessage |
   );
 }
 
-export function listTaskMessages(taskId: string, after?: string): TaskMessage[] {
+export function listTaskMessages(taskId: string, afterSeq = 0): TaskMessage[] {
   const params: unknown[] = [taskId];
   let cursor = '';
-  if (after) {
-    cursor = ' AND m.created_at > ?';
-    params.push(after);
+  if (afterSeq > 0) {
+    cursor = ' AND m.seq > ?';
+    params.push(afterSeq);
   }
   return queryAll<TaskMessage>(
     `SELECT m.*
        FROM task_messages m
       WHERE m.task_id = ?${cursor}
-      ORDER BY m.created_at ASC, m.id ASC
+      ORDER BY m.seq ASC
       LIMIT 500`,
     params,
+  );
+}
+
+export function getTaskMessageState(taskId: string, readerKey: string) {
+  const task = queryOne<{ id: string }>('SELECT id FROM tasks WHERE id = ?', [taskId]);
+  if (!task) throw new Error('Task not found');
+  const lastSeq = queryOne<{ value: number }>('SELECT COALESCE(MAX(seq),0) AS value FROM task_messages WHERE task_id = ?', [taskId])?.value || 0;
+  const lastReadSeq = queryOne<{ last_read_seq: number }>(
+    'SELECT last_read_seq FROM task_message_reads WHERE task_id = ? AND reader_key = ?', [taskId, readerKey],
+  )?.last_read_seq || 0;
+  const unreadCount = queryOne<{ value: number }>(
+    `SELECT COUNT(*) AS value FROM task_messages
+      WHERE task_id = ? AND seq > ? AND sender_type != 'human'`, [taskId, lastReadSeq],
+  )?.value || 0;
+  return { lastSeq, lastReadSeq, unreadCount };
+}
+
+export function markTaskMessagesRead(taskId: string, readerKey: string, throughSeq?: number) {
+  const state = getTaskMessageState(taskId, readerKey);
+  const target = Math.max(0, Math.min(throughSeq ?? state.lastSeq, state.lastSeq));
+  const now = new Date().toISOString();
+  run(`INSERT INTO task_message_reads(task_id,reader_key,last_read_seq,updated_at) VALUES(?,?,?,?)
+       ON CONFLICT(task_id,reader_key) DO UPDATE SET
+       last_read_seq=MAX(task_message_reads.last_read_seq,excluded.last_read_seq),updated_at=excluded.updated_at`,
+      [taskId, readerKey, target, now]);
+  return getTaskMessageState(taskId, readerKey);
+}
+
+export function resolveLiveTaskExecution(taskId: string, agentId: string) {
+  return queryOne<{ id: string; session_key: string }>(
+    `SELECT id,session_key FROM task_execution_runs
+      WHERE task_id = ? AND agent_id = ?
+        AND state IN ('running','waiting_input','blocked','recovering')
+      ORDER BY updated_at DESC LIMIT 1`,
+    [taskId, agentId],
   );
 }
 
@@ -88,12 +123,15 @@ export function createTaskMessage(taskId: string, input: CreateTaskMessageInput)
   const now = new Date().toISOString();
   const id = randomUUID();
   transaction(() => {
+    const seq = queryOne<{ value: number }>(
+      'SELECT COALESCE(MAX(seq),0)+1 AS value FROM task_messages WHERE task_id = ?', [taskId],
+    )!.value;
     run(
       `INSERT INTO task_messages
-        (id, task_id, sender_type, sender_agent_id, sender_name, content,
+        (id, task_id, seq, sender_type, sender_agent_id, sender_name, content,
          client_idempotency_key, delivery_status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, taskId, sender.senderType, sender.senderAgentId, sender.senderName,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, taskId, seq, sender.senderType, sender.senderAgentId, sender.senderName,
        input.content, input.idempotencyKey, sender.status, now, now],
     );
     run('UPDATE tasks SET updated_at = ? WHERE id = ?', [now, taskId]);
@@ -123,6 +161,8 @@ export async function deliverTaskMessage(taskId: string, messageId: string): Pro
   if (!message) throw new Error('Message not found');
   if (message.sender_type !== 'human') return message;
   if (message.delivery_status === 'delivered') return message;
+  run('UPDATE task_messages SET delivery_attempts=delivery_attempts+1,updated_at=? WHERE id=?',
+    [new Date().toISOString(), messageId]);
 
   const task = queryOne<TaskChatTask>(
     `SELECT t.*, a.name AS assigned_agent_name
@@ -133,15 +173,10 @@ export async function deliverTaskMessage(taskId: string, messageId: string): Pro
   const agent = queryOne<Agent>('SELECT * FROM agents WHERE id = ?', [task.assigned_agent_id]);
   if (!agent) return markFailed(taskId, messageId, 'Assigned agent not found');
 
-  const session = queryOne<OpenClawSession>(
-    `SELECT * FROM openclaw_sessions
-      WHERE agent_id = ? AND status = 'active'
-      ORDER BY CASE WHEN task_id = ? THEN 0 ELSE 1 END, updated_at DESC LIMIT 1`,
-    [agent.id, taskId],
-  );
-  if (!session) return markFailed(taskId, messageId, 'Assigned agent has no active Mission Control session');
+  const execution = resolveLiveTaskExecution(taskId, agent.id);
+  if (!execution) return markFailed(taskId, messageId, 'Assigned agent has no live execution context for this task');
 
-  const sessionKey = `${agent.session_key_prefix || 'agent:main:'}${session.openclaw_session_id}`;
+  const sessionKey = execution.session_key;
   try {
     const client = getOpenClawClient();
     if (!client.isConnected()) await client.connect();

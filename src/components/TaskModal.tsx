@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { X, Save, Trash2, Activity, Package, Bot, ClipboardList, Plus, Users, FileText, MessageCircle } from 'lucide-react';
 import { useMissionControl } from '@/lib/store';
 import { triggerAutoDispatch, shouldTriggerAutoDispatch } from '@/lib/auto-dispatch';
@@ -28,6 +28,15 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
   const [usePlanningMode, setUsePlanningMode] = useState(false);
   // Auto-switch to planning tab if task is in planning status
   const [activeTab, setActiveTab] = useState<TabType>(task?.status === 'planning' ? 'planning' : task ? 'chat' : 'overview');
+  const [chatUnread, setChatUnread] = useState(0);
+
+  useEffect(() => {
+    if (!task) return;
+    fetch(`/api/tasks/${task.id}/messages`, { cache: 'no-store' })
+      .then((response) => response.ok ? response.json() : null)
+      .then((data) => setChatUnread(data?.unreadCount || 0))
+      .catch(() => undefined);
+  }, [task]);
 
   // Stable callback for when spec is locked - use window.location.reload() to refresh data
   const handleSpecLocked = useCallback(() => {
@@ -206,7 +215,7 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
   const priorities: TaskPriority[] = ['low', 'normal', 'high', 'urgent'];
 
   const tabs = [
-    { id: 'chat' as TabType, label: 'Chat', icon: <MessageCircle className="w-4 h-4" /> },
+    { id: 'chat' as TabType, label: 'Chat', icon: <MessageCircle className="w-4 h-4" />, badge: chatUnread },
     { id: 'overview' as TabType, label: 'Overview', icon: null },
     { id: 'brief' as TabType, label: 'Brief', icon: <FileText className="w-4 h-4" /> },
     { id: 'planning' as TabType, label: 'Planning', icon: <ClipboardList className="w-4 h-4" /> },
@@ -268,6 +277,11 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
               >
                 {tab.icon}
                 {tab.label}
+                {'badge' in tab && (tab.badge ?? 0) > 0 && (
+                  <span className="min-w-5 rounded-full bg-mc-accent px-1.5 py-0.5 text-[10px] leading-none text-mc-bg">
+                    {(tab.badge ?? 0) > 99 ? '99+' : tab.badge}
+                  </span>
+                )}
               </button>
             ))}
           </div>
@@ -277,7 +291,7 @@ export function TaskModal({ task, onClose, workspaceId }: TaskModalProps) {
         <div className="flex-1 overflow-y-auto p-4">
           {/* Chat Tab */}
           {activeTab === 'chat' && task && (
-            <TaskChat taskId={task.id} agentName={task.assigned_agent?.name || agents.find((agent) => agent.id === task.assigned_agent_id)?.name} />
+            <TaskChat taskId={task.id} agentName={task.assigned_agent?.name || agents.find((agent) => agent.id === task.assigned_agent_id)?.name} onUnreadChange={setChatUnread} />
           )}
           {/* Overview Tab */}
           {activeTab === 'overview' && (

@@ -1330,6 +1330,33 @@ const migrations: Migration[] = [
           ON task_messages(task_id, created_at, id);
       `);
     }
+  },
+  {
+    id: '041',
+    name: 'strengthen_task_chat_ordering_and_reads',
+    up: (db) => {
+      const columns = new Set((db.prepare('PRAGMA table_info(task_messages)').all() as { name: string }[]).map(row => row.name));
+      if (!columns.has('seq')) db.exec('ALTER TABLE task_messages ADD COLUMN seq INTEGER');
+      if (!columns.has('delivery_attempts')) db.exec('ALTER TABLE task_messages ADD COLUMN delivery_attempts INTEGER NOT NULL DEFAULT 0');
+      db.exec(`
+        WITH ranked AS (
+          SELECT id, ROW_NUMBER() OVER (PARTITION BY task_id ORDER BY created_at, id) AS n
+          FROM task_messages
+        )
+        UPDATE task_messages SET seq=(SELECT n FROM ranked WHERE ranked.id=task_messages.id)
+        WHERE seq IS NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_task_messages_task_seq ON task_messages(task_id, seq);
+        DROP INDEX IF EXISTS idx_task_messages_timeline;
+        CREATE INDEX IF NOT EXISTS idx_task_messages_timeline ON task_messages(task_id, seq);
+        CREATE TABLE IF NOT EXISTS task_message_reads (
+          task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+          reader_key TEXT NOT NULL,
+          last_read_seq INTEGER NOT NULL DEFAULT 0,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY(task_id, reader_key)
+        );
+      `);
+    }
   }
 ];
 

@@ -10,19 +10,22 @@ import type { TaskActivity, TaskMessage } from '@/lib/types';
 interface TaskChatProps {
   taskId: string;
   agentName?: string;
+  onUnreadChange?: (count: number) => void;
 }
 
 type TimelineItem =
   | { kind: 'message'; at: string; value: TaskMessage }
   | { kind: 'activity'; at: string; value: TaskActivity };
 
-export function TaskChat({ taskId, agentName }: TaskChatProps) {
+export function TaskChat({ taskId, agentName, onUnreadChange }: TaskChatProps) {
   const [messages, setMessages] = useState<TaskMessage[]>([]);
   const [activities, setActivities] = useState<TaskActivity[]>([]);
   const [draft, setDraft] = useState('');
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [connection, setConnection] = useState<'live' | 'polling'>('live');
+  const [lastSeq, setLastSeq] = useState(0);
+  const [unreadCount, setUnreadCount] = useState(0);
   const bottomRef = useRef<HTMLDivElement>(null);
   const idempotencyRef = useRef<string | null>(null);
 
@@ -31,10 +34,16 @@ export function TaskChat({ taskId, agentName }: TaskChatProps) {
       fetch(`/api/tasks/${taskId}/messages`, { cache: 'no-store' }),
       fetch(`/api/tasks/${taskId}/activities`, { cache: 'no-store' }),
     ]);
-    if (messagesRes.ok) setMessages(await messagesRes.json());
+    if (messagesRes.ok) {
+      const data = await messagesRes.json();
+      setMessages(data.messages || []);
+      setLastSeq(data.lastSeq || 0);
+      setUnreadCount(data.unreadCount || 0);
+      onUnreadChange?.(data.unreadCount || 0);
+    }
     if (activitiesRes.ok) setActivities(await activitiesRes.json());
     setLoading(false);
-  }, [taskId]);
+  }, [onUnreadChange, taskId]);
 
   useEffect(() => { load().catch(() => setLoading(false)); }, [load]);
 
@@ -51,6 +60,10 @@ export function TaskChat({ taskId, agentName }: TaskChatProps) {
             const without = current.filter((item) => item.id !== incoming.id);
             return [...without, incoming].sort((a, b) => a.created_at.localeCompare(b.created_at));
           });
+          setLastSeq((current) => Math.max(current, incoming.seq || 0));
+          if (incoming.sender_type !== 'human') {
+            setUnreadCount((current) => current + 1);
+          }
         }
         if ((update.type === 'activity_logged' || update.type === 'task_activity_added') && update.payload.task_id === taskId) {
           const incoming = update.payload as TaskActivity;
@@ -68,6 +81,21 @@ export function TaskChat({ taskId, agentName }: TaskChatProps) {
       if (polling) clearInterval(polling);
     };
   }, [load, taskId]);
+
+  useEffect(() => {
+    if (!lastSeq) return;
+    const timer = setTimeout(() => {
+      fetch(`/api/tasks/${taskId}/messages`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'mark_read', through_seq: lastSeq }),
+      }).then((response) => response.ok ? response.json() : null).then((state) => {
+        if (!state) return;
+        setUnreadCount(state.unreadCount || 0);
+        onUnreadChange?.(state.unreadCount || 0);
+      }).catch(() => undefined);
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [lastSeq, onUnreadChange, taskId]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -115,6 +143,7 @@ export function TaskChat({ taskId, agentName }: TaskChatProps) {
       <div className="px-4 py-2 border-b border-mc-border flex items-center justify-between text-xs text-mc-text-secondary">
         <span>Task conversation with {agentName || 'assigned agent'} · activity is included chronologically</span>
         <span className="flex items-center gap-1.5">
+          {unreadCount > 0 && <span className="rounded-full bg-mc-accent px-1.5 py-0.5 text-mc-bg font-semibold">{unreadCount} unread</span>}
           <span className={`w-2 h-2 rounded-full ${connection === 'live' ? 'bg-green-400' : 'bg-amber-400'}`} />
           {connection === 'live' ? 'Live' : 'Polling fallback'}
         </span>

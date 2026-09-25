@@ -130,12 +130,14 @@ export type TaskMessageDeliveryStatus = 'queued' | 'delivered' | 'failed' | 'rec
 export interface TaskMessage {
   id: string;
   task_id: string;
+  seq: number;
   sender_type: TaskMessageSender;
   sender_agent_id?: string | null;
   sender_name: string;
   content: string;
   client_idempotency_key: string;
   delivery_status: TaskMessageDeliveryStatus;
+  delivery_attempts: number;
   delivery_error?: string | null;
   gateway_session_key?: string | null;
   gateway_message_id?: string | null;
