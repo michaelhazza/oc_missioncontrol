@@ -1,6 +1,7 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Plus, ChevronRight, GripVertical, ArrowRightLeft } from 'lucide-react';
 import { useMissionControl } from '@/lib/store';
 import { triggerAutoDispatch, shouldTriggerAutoDispatch } from '@/lib/auto-dispatch';
@@ -30,6 +31,9 @@ const COLUMNS: { id: TaskStatus; label: string; color: string }[] = [
 
 export function MissionQueue({ workspaceId, mobileMode = false, isPortrait = true }: MissionQueueProps) {
   const { tasks, updateTaskStatus, addEvent } = useMissionControl();
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [draggedTask, setDraggedTask] = useState<Task | null>(null);
@@ -38,6 +42,22 @@ export function MissionQueue({ workspaceId, mobileMode = false, isPortrait = tru
 
   // Derive editingTask from the store so it updates live via SSE
   const editingTask = editingTaskId ? tasks.find(t => t.id === editingTaskId) || null : null;
+
+  useEffect(() => {
+    const linkedTaskId = searchParams.get('task');
+    if (linkedTaskId && tasks.some((task) => task.id === linkedTaskId)) {
+      setEditingTaskId(linkedTaskId);
+    }
+  }, [searchParams, tasks]);
+
+  const closeTaskModal = () => {
+    setEditingTaskId(null);
+    if (searchParams.has('task')) {
+      const nextParams = new URLSearchParams(searchParams.toString());
+      nextParams.delete('task');
+      router.replace(nextParams.size ? `${pathname}?${nextParams}` : pathname, { scroll: false });
+    }
+  };
 
   const getTasksByStatus = (status: TaskStatus) => tasks.filter((task) => task.status === status);
 
@@ -204,7 +224,7 @@ export function MissionQueue({ workspaceId, mobileMode = false, isPortrait = tru
       )}
 
       {showCreateModal && <TaskModal onClose={() => setShowCreateModal(false)} workspaceId={workspaceId} />}
-      {editingTask && <TaskModal task={editingTask} onClose={() => setEditingTaskId(null)} workspaceId={workspaceId} />}
+      {editingTask && <TaskModal task={editingTask} onClose={closeTaskModal} workspaceId={workspaceId} />}
 
       {mobileMode && statusMoveTask && (
         <div className="fixed inset-0 z-50 bg-black/60 p-4 flex items-end sm:items-center sm:justify-center" onClick={() => setStatusMoveTask(null)}>

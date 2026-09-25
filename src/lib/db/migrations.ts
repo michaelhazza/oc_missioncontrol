@@ -1303,6 +1303,60 @@ const migrations: Migration[] = [
       db.exec(`UPDATE mattermost_task_update_outbox
         SET account_id=COALESCE((SELECT mattermost_account_id FROM tasks WHERE tasks.id=mattermost_task_update_outbox.task_id),account_id)`);
     }
+  },
+  {
+    id: '040',
+    name: 'add_durable_task_chat',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS task_messages (
+          id TEXT PRIMARY KEY,
+          task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+          sender_type TEXT NOT NULL CHECK (sender_type IN ('human', 'agent', 'system')),
+          sender_agent_id TEXT REFERENCES agents(id),
+          sender_name TEXT NOT NULL,
+          content TEXT NOT NULL,
+          client_idempotency_key TEXT NOT NULL,
+          delivery_status TEXT NOT NULL DEFAULT 'queued' CHECK (delivery_status IN ('queued', 'delivered', 'failed', 'received')),
+          delivery_error TEXT,
+          gateway_session_key TEXT,
+          gateway_message_id TEXT,
+          metadata TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(task_id, client_idempotency_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_task_messages_timeline
+          ON task_messages(task_id, created_at, id);
+      `);
+    }
+  },
+  {
+    id: '041',
+    name: 'strengthen_task_chat_ordering_and_reads',
+    up: (db) => {
+      const columns = new Set((db.prepare('PRAGMA table_info(task_messages)').all() as { name: string }[]).map(row => row.name));
+      if (!columns.has('seq')) db.exec('ALTER TABLE task_messages ADD COLUMN seq INTEGER');
+      if (!columns.has('delivery_attempts')) db.exec('ALTER TABLE task_messages ADD COLUMN delivery_attempts INTEGER NOT NULL DEFAULT 0');
+      db.exec(`
+        WITH ranked AS (
+          SELECT id, ROW_NUMBER() OVER (PARTITION BY task_id ORDER BY created_at, id) AS n
+          FROM task_messages
+        )
+        UPDATE task_messages SET seq=(SELECT n FROM ranked WHERE ranked.id=task_messages.id)
+        WHERE seq IS NULL;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_task_messages_task_seq ON task_messages(task_id, seq);
+        DROP INDEX IF EXISTS idx_task_messages_timeline;
+        CREATE INDEX IF NOT EXISTS idx_task_messages_timeline ON task_messages(task_id, seq);
+        CREATE TABLE IF NOT EXISTS task_message_reads (
+          task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+          reader_key TEXT NOT NULL,
+          last_read_seq INTEGER NOT NULL DEFAULT 0,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY(task_id, reader_key)
+        );
+      `);
+    }
   }
 ];
 

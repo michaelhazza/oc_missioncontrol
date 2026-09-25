@@ -124,6 +124,29 @@ export interface Message {
   sender?: Agent;
 }
 
+export type TaskMessageSender = 'human' | 'agent' | 'system';
+export type TaskMessageDeliveryStatus = 'queued' | 'delivered' | 'failed' | 'received';
+
+export interface TaskMessage {
+  id: string;
+  task_id: string;
+  seq: number;
+  sender_type: TaskMessageSender;
+  sender_agent_id?: string | null;
+  sender_name: string;
+  content: string;
+  client_idempotency_key: string;
+  delivery_status: TaskMessageDeliveryStatus;
+  delivery_attempts: number;
+  delivery_error?: string | null;
+  gateway_session_key?: string | null;
+  gateway_message_id?: string | null;
+  metadata?: string | null;
+  created_at: string;
+  updated_at: string;
+  agent?: Pick<Agent, 'id' | 'name' | 'avatar_emoji'>;
+}
+
 export interface Event {
   id: string;
   type: EventType;
@@ -443,11 +466,12 @@ export type SSEEventType =
   | 'agent_completed'
   | 'content_updated'
   | 'integration_error'
-  | 'task_activity_added';
+  | 'task_activity_added'
+  | 'task_message_updated';
 
 export interface SSEEvent {
   type: SSEEventType;
-  payload: Task | TaskActivity | TaskDeliverable | {
+  payload: Task | TaskActivity | TaskDeliverable | TaskMessage | {
     taskId: string;
     sessionId: string;
     agentName?: string;
